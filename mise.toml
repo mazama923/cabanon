@@ -1,0 +1,48 @@
+min_version = "2026.10.0"
+
+[tools]
+gleam = "1.19.2"
+erlang = "28.1"
+rebar = "3.25.1"
+pre-commit = "4.4.0"
+gitleaks = "8.30.0"
+
+[tasks.format]
+description = "Format Gleam source files"
+run = "gleam format src test"
+
+[tasks."format-check"]
+description = "Verify Gleam formatting"
+run = "gleam format --check src test"
+
+[tasks.check]
+description = "Type-check the application"
+run = "gleam check"
+
+[tasks.test]
+description = "Run the test suite"
+run = "gleam test"
+
+[tasks.run]
+description = "Run the development server"
+run = "gleam run"
+
+[tasks.package]
+description = "Build the Erlang deployment archive and checksum"
+run = "./scripts/package.sh"
+
+[tasks."hooks:install"]
+description = "Install local Git hooks"
+run = "pre-commit install --install-hooks"
+
+[tasks."security:secrets"]
+description = "Scan the repository for committed secrets"
+run = "gitleaks git --redact --no-banner"
+
+[tasks.verify]
+description = "Run formatting, type checking, and tests"
+depends = ["format-check", "check", "test"]
+
+[tasks.ci]
+description = "Run the full local quality gate"
+depends = ["verify", "security:secrets"]

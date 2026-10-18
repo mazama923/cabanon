@@ -1,4 +1,28 @@
+# Gleam and Erlang build output
+/build/
+/dist/
 *.beam
 *.ez
-/build
 erl_crash.dump
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+infra/.env
+infra/systemd/cabanon.env
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local databases and backups
+*.dump
+*.sql.gz
+*.backup
+postgres-data/
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
