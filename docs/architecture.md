@@ -2,13 +2,16 @@
 
 ## Decision
 
-Cabanon is a **modular monolith** compiled by Gleam to Erlang. The application is deployed directly as an Erlang shipment in a private Proxmox LXC and supervised by systemd. PostgreSQL runs in the same LXC and is reachable only through a Unix socket or `127.0.0.1`. A separate, public Caddy LXC terminates TLS and reverse-proxies requests to the application LXC over a private network.
+Cabanon is a **modular monolith** split into three Gleam packages: `client/` targets JavaScript and contains the Lustre browser UI, `shared/` contains pure domain rules, and the repository root targets Erlang for the HTTP server. The server is deployed directly as an Erlang shipment in a private Proxmox LXC and supervised by systemd. PostgreSQL runs in the same LXC and is reachable only through a Unix socket or `127.0.0.1`. A separate, public Caddy LXC terminates TLS and reverse-proxies requests to the application LXC over a private network.
 
-A Gleam application targeting Erlang is not a standalone native executable. The deployable artifact is an archive containing BEAM bytecode and an `entrypoint.sh`; the application LXC must provide a compatible Erlang/OTP runtime. This is intentionally simpler than introducing Docker or another container runtime.
+The client and server both depend on `shared/`, so household contribution and actual construction-cost rules are implemented once and compiled for both targets. The current Lustre development server serves the client on port 1234; production bundling and serving those assets through the Erlang server are not wired up yet. Client state, including construction history and custom categories, is in memory and resets on reload.
+
+A Gleam application targeting Erlang is not a standalone native executable. The deployable backend artifact is an archive containing BEAM bytecode and an `entrypoint.sh`; the application LXC must provide a compatible Erlang/OTP runtime. This is intentionally simpler than introducing Docker or another container runtime.
 
 ```mermaid
 flowchart TD
-    Browser[Browser] -->|HTTPS 443| Caddy[Caddy LXC]
+    Browser[Browser] -->|Development: localhost:1234| Client[Lustre JavaScript client]
+    Browser -->|Production HTTPS 443| Caddy[Caddy LXC]
     Caddy -->|Private network HTTP 8080| App[Cabanon systemd service]
     App -->|Unix socket or loopback| Db[(PostgreSQL)]
     Backup[Encrypted off-host backups] <-->|pg_dump and restore test| Db
@@ -18,12 +21,13 @@ flowchart TD
 
 A personal finance application benefits more from understandable operations and recoverability than from service independence. Gleam provides type-safe boundaries while the Erlang runtime provides lightweight concurrency. The domain is split into modules, not deployable services:
 
-- `domain/household`: expenses, residents, contribution calculation, settlement rules.
-- `domain/construction`: estimates, invoices, actual spend, and forecast.
-- `web`: HTTP parsing, authentication, authorization, CSRF protection, and views.
-- future `persistence`: PostgreSQL repositories and migrations.
+- `shared/src/cabanon/domain/household`: expenses, residents, contribution calculation, settlement rules.
+- `shared/src/cabanon/domain/construction`: actual cost validation, totals, and category aggregation; estimates and forecasts are future work.
+- `client/`: Lustre views and browser interaction, compiled to JavaScript.
+- `src/cabanon/web`: Erlang HTTP parsing, authentication, authorization, CSRF protection, and API routes.
+- future persistence adapters: PostgreSQL repositories and migrations.
 
-Dependencies point inward: `web` and `persistence` may call `domain`; domain modules must not import either adapter.
+Both adapters depend inward on `shared`; domain modules must not import either adapter.
 
 ## Network and trust boundaries
 
@@ -40,7 +44,7 @@ Putting PostgreSQL in the application LXC is appropriate for a small personal de
 
 ## Next implementation slices
 
-1. Add PostgreSQL migrations and a repository interface without leaking SQL into domain modules.
-2. Add local password authentication with Argon2id, secure session cookies, CSRF middleware, and login throttling.
-3. Deliver household expenses end-to-end before starting construction-budget screens.
-4. Add append-only audit events for financial changes and exports.
+1. Serve the built Lustre assets through the Erlang application and add narrow APIs for household and construction data.
+2. Add PostgreSQL migrations and repository interfaces without leaking SQL into domain modules.
+3. Add authentication before storing household financial data across sessions.
+4. Persist household expenses and actual construction costs, with explicit correction workflows for financial history.
