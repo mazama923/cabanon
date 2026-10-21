@@ -12,7 +12,7 @@ The application is deliberately a modular monolith: simple to learn, deploy, bac
 
 ## Status
 
-The repository contains an Erlang HTTP server, a Lustre browser client with in-memory household and construction-cost screens, a shared pure domain package, and operations documentation. The client can calculate equal household contributions and record actual construction costs by date, description, and category, with totals by category. Client data resets on reload; authentication, persistence, and serving the production client bundle are future slices.
+The repository contains an Erlang HTTP server, a Lustre browser client with in-memory household and construction-cost screens, a shared pure domain package, and a PostgreSQL migration plus construction-cost storage adapter. The client can calculate equal household contributions and record actual construction costs by date, description, and category, with totals by category. The browser is not connected to the storage adapter yet, so client data still resets on reload. Authentication, the HTTP API, and serving the production client bundle remain future slices.
 
 ## Quick start
 
@@ -56,9 +56,11 @@ shared/src/
   cabanon/domain/  Pure household and construction rules for both targets
 src/cabanon/
   web/             Erlang HTTP routing and middleware
+  persistence/     Erlang-targeted database adapters
   env.gleam        Small boundary for mandatory runtime configuration
+priv/migrations/   PostgreSQL schema migrations
 src/cabanon.gleam  Erlang server bootstrap
-test/              Domain unit tests
+test/              Domain, route, and optional PostgreSQL integration tests
 docs/              Product, architecture, security, and operations decisions
 infra/systemd/     systemd service and runtime environment template
 scripts/           Release packaging scripts

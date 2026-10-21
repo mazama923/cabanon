@@ -4,7 +4,7 @@
 
 Cabanon is a **modular monolith** split into three Gleam packages: `client/` targets JavaScript and contains the Lustre browser UI, `shared/` contains pure domain rules, and the repository root targets Erlang for the HTTP server. The server is deployed directly as an Erlang shipment in a private Proxmox LXC and supervised by systemd. PostgreSQL runs in the same LXC and is reachable only through a Unix socket or `127.0.0.1`. A separate, public Caddy LXC terminates TLS and reverse-proxies requests to the application LXC over a private network.
 
-The client and server both depend on `shared/`, so household contribution and actual construction-cost rules are implemented once and compiled for both targets. The current Lustre development server serves the client on port 1234; production bundling and serving those assets through the Erlang server are not wired up yet. Client state, including construction history and custom categories, is in memory and resets on reload.
+The client and server both depend on `shared/`, so household contribution and actual construction-cost rules are implemented once and compiled for both targets. A PostgreSQL migration and construction-cost repository now exist in the Erlang package, but neither the HTTP routes nor the browser client call that repository yet. The current Lustre development server serves the client on port 1234; production bundling and serving those assets through the Erlang server are not wired up yet. Client state, including construction history and custom categories, is in memory and resets on reload.
 
 A Gleam application targeting Erlang is not a standalone native executable. The deployable backend artifact is an archive containing BEAM bytecode and an `entrypoint.sh`; the application LXC must provide a compatible Erlang/OTP runtime. This is intentionally simpler than introducing Docker or another container runtime.
 
@@ -25,7 +25,7 @@ A personal finance application benefits more from understandable operations and 
 - `shared/src/cabanon/domain/construction`: actual cost validation, totals, and category aggregation; estimates and forecasts are future work.
 - `client/`: Lustre views and browser interaction, compiled to JavaScript.
 - `src/cabanon/web`: Erlang HTTP parsing, authentication, authorization, CSRF protection, and API routes.
-- future persistence adapters: PostgreSQL repositories and migrations.
+- `src/cabanon/persistence`: PostgreSQL adapters; SQL stays outside the shared domain.
 
 Both adapters depend inward on `shared`; domain modules must not import either adapter.
 
@@ -44,7 +44,7 @@ Putting PostgreSQL in the application LXC is appropriate for a small personal de
 
 ## Next implementation slices
 
-1. Serve the built Lustre assets through the Erlang application and add narrow APIs for household and construction data.
-2. Add PostgreSQL migrations and repository interfaces without leaking SQL into domain modules.
-3. Add authentication before storing household financial data across sessions.
-4. Persist household expenses and actual construction costs, with explicit correction workflows for financial history.
+1. Add narrow Erlang HTTP routes for construction categories and actual costs, then connect the Lustre screen to those routes.
+2. Add authentication and household-scoped authorization before exposing financial APIs outside local development.
+3. Connect PostgreSQL to the application supervision tree and add persistence for household expenses.
+4. Add explicit correction workflows for financial history, without silently deleting records.
