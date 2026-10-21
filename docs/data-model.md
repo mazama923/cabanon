@@ -1,6 +1,6 @@
 # Data model
 
-This is the intended relational model. It is a design contract, not yet a migration. All monetary values are signed integer cents with an ISO 4217 currency code. The initial release should support one currency per household.
+This is the intended relational model. The construction-cost tables have an initial executable migration; the household tables remain a design contract. All monetary values are integer cents with an ISO 4217 currency code. The initial release should support one currency per household.
 
 ## Household budgeting
 
@@ -20,15 +20,15 @@ For contribution planning, `plan_contributions` applies the available account ba
 
 ## Construction cost history
 
-The current browser screen records actual costs only. Each entry has a date, description, category, and non-negative integer-cent amount. Record an invoice or purchase once; do not create duplicate entries for its instalments. The client shows the total and subtotals by category. Entries and custom categories currently exist only in browser memory and are cleared when the page reloads.
+The browser screen records actual costs only. Each entry has a date, description, category, and non-negative integer-cent amount. Record an invoice or purchase once; do not create duplicate entries for its instalments. The client shows the total and subtotals by category. The PostgreSQL migration seeds a single initial `My Home` project and the three default categories; the storage adapter can list and add categories and actual costs. The browser and HTTP server are not connected to this adapter yet, so browser entries still reset on reload.
 
 | Entity | Important fields | Notes |
 | --- | --- | --- |
-| `construction_projects` | `id`, `household_id`, `name`, `starts_on` | A household can retain historical projects |
-| `construction_categories` | `id`, `project_id`, `name`, `sort_order` | User-defined categories, initially construction, interior, and exterior |
-| `construction_costs` | `id`, `project_id`, `category_id`, `actual_cents`, `incurred_on`, `description` | One confirmed invoice or purchase; amount stored in integer cents |
+| `construction_projects` | `id`, `name`, `created_at` | Migration seeds one project; household ownership is deferred until households exist |
+| `construction_categories` | `id`, `project_id`, `name`, `sort_order`, `created_at` | User-defined categories, initially construction, interior, and exterior |
+| `construction_costs` | `id`, `project_id`, `category_id`, `amount_cents`, `incurred_on`, `description`, `created_at` | One confirmed invoice or purchase; amount stored in integer cents |
 
-PostgreSQL persistence, correction/reversal workflows, and any estimate or forecast feature are future work. Financial history must not be silently deleted when those workflows are implemented.
+The initial project is not yet scoped to a household because accounts and households are not implemented. Add household ownership and enforce household-scoped queries before supporting multiple households or exposing the API. Correction/reversal workflows and estimate or forecast screens are future work. Financial history must not be silently deleted when those workflows are implemented.
 
 ## Integrity rules
 

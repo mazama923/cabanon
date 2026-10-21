@@ -26,8 +26,10 @@ Cabanon is a self-hosted household-finance application written in Gleam. A Lustr
 | `client/src/` | Lustre browser application targeting JavaScript |
 | `client/assets/` | Frontend CSS and static assets |
 | `src/cabanon/web/` | Erlang HTTP routes and middleware |
+| `src/cabanon/persistence/` | Erlang-targeted database adapters |
+| `priv/migrations/` | PostgreSQL schema migrations |
 | `src/cabanon.gleam` | Erlang server bootstrap |
-| `test/cabanon_test.gleam` | Focused domain and route tests |
+| `test/` | Domain, route, and optional PostgreSQL integration tests |
 | `docs/` | Architecture, data, security, development, operations |
 | `infra/systemd/` | Production service and environment template |
 | `scripts/package.sh` | Erlang shipment archive and checksum |
