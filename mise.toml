@@ -9,11 +9,11 @@ gitleaks = "8.30.0"
 
 [tasks.format]
 description = "Format Gleam source files"
-run = "gleam format src test"
+run = "gleam format src test && cd client && gleam format src"
 
 [tasks."format-check"]
 description = "Verify Gleam formatting"
-run = "gleam format --check src test"
+run = "gleam format --check src test && cd client && gleam format --check src"
 
 [tasks.check]
 description = "Type-check the application"
@@ -26,6 +26,14 @@ run = "gleam test"
 [tasks.run]
 description = "Run the development server"
 run = "gleam run"
+
+[tasks."frontend:run"]
+description = "Run the Lustre frontend development server"
+run = "cd client && gleam run -m lustre/dev start"
+
+[tasks."frontend:check"]
+description = "Type-check and build the Lustre frontend"
+run = "cd client && gleam check && gleam run -m lustre/dev build --outdir=build/ci-preview"
 
 [tasks.package]
 description = "Build the Erlang deployment archive and checksum"
@@ -41,7 +49,7 @@ run = "gitleaks git --redact --no-banner"
 
 [tasks.verify]
 description = "Run formatting, type checking, and tests"
-depends = ["format-check", "check", "test"]
+depends = ["format-check", "check", "test", "frontend:check"]
 
 [tasks.ci]
 description = "Run the full local quality gate"

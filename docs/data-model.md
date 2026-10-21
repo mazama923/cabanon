@@ -16,16 +16,19 @@ This is the intended relational model. It is a design contract, not yet a migrat
 
 `expense_splits.amount_cents` must sum exactly to `expenses.amount_cents`. The domain function exposes the base share and the number of residents who pay one extra cent, avoiding rounding ambiguity.
 
-## Construction budgeting
+For contribution planning, `plan_contributions` applies the available account balance to expenses first, up to the expense total. Contributions are calculated from the remaining amount and never become negative; any surplus balance is returned separately. The current browser client takes this balance as an in-memory input. Whether it should later be derived from persisted account activity belongs to the persistence design.
+
+## Construction cost history
+
+The current browser screen records actual costs only. Each entry has a date, description, category, and non-negative integer-cent amount. Record an invoice or purchase once; do not create duplicate entries for its instalments. The client shows the total and subtotals by category. Entries and custom categories currently exist only in browser memory and are cleared when the page reloads.
 
 | Entity | Important fields | Notes |
 | --- | --- | --- |
 | `construction_projects` | `id`, `household_id`, `name`, `starts_on` | A household can retain historical projects |
-| `construction_categories` | `id`, `project_id`, `name`, `sort_order` | Examples: land, foundations, roofing, utilities |
-| `construction_budget_lines` | `id`, `category_id`, `description`, `estimated_cents`, `approved_cents` | Planning and approved commitments are distinct |
-| `construction_costs` | `id`, `budget_line_id`, `actual_cents`, `incurred_on`, `supplier`, `document_ref` | Actual invoices or payments |
+| `construction_categories` | `id`, `project_id`, `name`, `sort_order` | User-defined categories, initially construction, interior, and exterior |
+| `construction_costs` | `id`, `project_id`, `category_id`, `actual_cents`, `incurred_on`, `description` | One confirmed invoice or purchase; amount stored in integer cents |
 
-The dashboard must show all three values: estimated total, actual committed total, and forecast total. A forecast uses actual cost where available and estimate otherwise.
+PostgreSQL persistence, correction/reversal workflows, and any estimate or forecast feature are future work. Financial history must not be silently deleted when those workflows are implemented.
 
 ## Integrity rules
 

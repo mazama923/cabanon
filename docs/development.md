@@ -17,6 +17,18 @@ export CABANON_SECRET_KEY_BASE="$(openssl rand -hex 32)"
 
 The application refuses to start when this value is absent. Use a unique random value for every environment.
 
+## Frontend development
+
+The Lustre frontend is a separate Gleam package in `client/`, compiled for JavaScript. The root package remains the Erlang server.
+
+```sh
+mise run frontend:run
+```
+
+The Lustre development server is available at `http://localhost:1234` and watches `client/src/` and `client/assets/`. The in-memory browser app has a household calculator and a construction-cost history. It supports custom household expense rows, a configurable household size, equal contributions after applying the available account balance, and construction entries with a date, description, category, and amount. Construction totals update by category, and users can add categories. All client data resets when the page reloads. The JavaScript client and Erlang server both use the pure domain package in `shared/`. No database is needed for frontend development.
+
+Run `mise run frontend:check` to format-check, type-check, and build the browser bundle. The first build downloads Bun through Lustre Dev Tools if it is not already available.
+
 ## Local database
 
 PostgreSQL is intentionally installed as a native operating-system service, not through Docker or Compose. It is not needed until the persistence slice is implemented.
@@ -43,6 +55,7 @@ This writes `dist/cabanon-erlang-shipment.tar.gz` and its SHA-256 checksum. The 
 ```sh
 mise run format-check
 mise run check
+mise run frontend:check
 mise run test
 mise run security:secrets
 mise run ci
@@ -52,7 +65,7 @@ Run `mise run format` before committing. The Git hook prevents common whitespace
 
 ## Learning path
 
-Start in `src/cabanon/domain/`. The modules are ordinary Gleam functions with no database or HTTP dependency, so `gleam test` gives fast feedback. For each feature:
+Start with the pure modules in `shared/src/cabanon/domain/`; they are ordinary Gleam functions with no database or HTTP dependency. Then follow `client/src/cabanon_frontend.gleam` to see how Lustre's model, messages, update function, and view turn those rules into an interactive page. `mise run test` exercises the shared domain from the Erlang side, while `mise run frontend:check` validates the JavaScript client.
 
 1. write the domain type and a failing unit test;
 2. implement the pure calculation;

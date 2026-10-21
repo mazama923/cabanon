@@ -1,0 +1,15 @@
+name = "cabanon_frontend"
+version = "0.1.0"
+target = "javascript"
+
+[dependencies]
+cabanon_shared = { path = "../shared" }
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+lustre = ">= 5.7.1 and < 6.0.0"
+
+[dev_dependencies]
+lustre_dev_tools = ">= 2.4.0 and < 3.0.0"
+
+[tools.lustre.html]
+title = "Cabanon — Budget du foyer"
+stylesheets = [{ href = "/styles.css" }]

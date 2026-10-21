@@ -6,13 +6,13 @@ It helps a household to:
 
 - track recurring and exceptional household expenses;
 - calculate a fair contribution to the joint account for each resident;
-- track estimates, commitments, and actual costs for a house-construction project.
+- keep a detailed history of actual costs for a house-construction project.
 
 The application is deliberately a modular monolith: simple to learn, deploy, back up, and evolve without distributed-system overhead.
 
 ## Status
 
-The repository contains the secure application foundation: a Gleam HTTP server, health endpoint, pure domain calculations, unit tests, development tooling, and operations documentation. Authentication, persistence, and the user interface are the next vertical slices.
+The repository contains an Erlang HTTP server, a Lustre browser client with in-memory household and construction-cost screens, a shared pure domain package, and operations documentation. The client can calculate equal household contributions and record actual construction costs by date, description, and category, with totals by category. Client data resets on reload; authentication, persistence, and serving the production client bundle are future slices.
 
 ## Quick start
 
@@ -24,7 +24,9 @@ mise run run
 curl http://127.0.0.1:8080/healthz
 ```
 
-`CABANON_SECRET_KEY_BASE` is mandatory. Keep the generated value in a secret manager or a root-owned environment file; never commit it.
+`CABANON_SECRET_KEY_BASE` is mandatory for the Erlang server. Keep the generated value in a secret manager or a root-owned environment file; never commit it.
+
+For the browser calculator, run `mise run frontend:run` in another terminal and open `http://localhost:1234`. Its in-memory data resets when the page reloads.
 
 ## Development commands
 
@@ -33,6 +35,8 @@ mise run format
 mise run check
 mise run test
 mise run verify
+mise run frontend:check
+mise run frontend:run
 mise run package
 mise run ci
 mise tasks
@@ -45,11 +49,15 @@ See [Development](docs/development.md) for the local PostgreSQL workflow and [Op
 ## Repository layout
 
 ```text
+client/
+  src/             Lustre application targeting JavaScript
+  assets/          Frontend styles and static assets
+shared/src/
+  cabanon/domain/  Pure household and construction rules for both targets
 src/cabanon/
-  domain/          Pure household and construction rules
-  web/             HTTP routing and middleware
+  web/             Erlang HTTP routing and middleware
   env.gleam        Small boundary for mandatory runtime configuration
-src/cabanon.gleam  Application bootstrap
+src/cabanon.gleam  Erlang server bootstrap
 test/              Domain unit tests
 docs/              Product, architecture, security, and operations decisions
 infra/systemd/     systemd service and runtime environment template
