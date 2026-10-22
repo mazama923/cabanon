@@ -2,7 +2,7 @@ min_version = "2026.10.0"
 
 [tools]
 gleam = "1.19.2"
-erlang = "28.1"
+erlang = "27.3.4.1"
 rebar = "3.25.1"
 pre-commit = "4.4.0"
 gitleaks = "8.30.0"

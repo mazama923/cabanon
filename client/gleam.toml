@@ -14,5 +14,5 @@ rsvp = ">= 2.0.0 and < 3.0.0"
 lustre_dev_tools = ">= 2.4.0 and < 3.0.0"
 
 [tools.lustre.html]
-title = "Cabanon — Budget du foyer"
+title = "Cabanon — Household budget"
 stylesheets = [{ href = "/styles.css" }]

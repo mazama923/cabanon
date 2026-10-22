@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-[Mise](https://mise.jdx.dev/) installs the pinned Gleam, Erlang, Rebar, pre-commit, and Gitleaks versions.
+[Mise](https://mise.jdx.dev/) installs the pinned Gleam, Erlang/OTP `27.3.4.1`, Rebar, pre-commit, and Gitleaks versions.
 
 ```sh
 mise install
@@ -67,7 +67,7 @@ export CABANON_DATABASE_URL='postgresql://cabanon_dev:URL_ENCODED_PASSWORD@127.0
 mise run dev
 ```
 
-`mise run dev` starts the Erlang backend and the Lustre frontend in parallel. Open `http://localhost:1234`; press `Ctrl-C` to stop both. The server listens on `127.0.0.1:8080`; its development CORS policy permits only the client origin `http://localhost:1234`. CORS is not authentication: the API has no accounts yet, so do not expose or reverse-proxy it beyond this machine. If `CABANON_DATABASE_URL` is unset or invalid, the server starts but household and construction API requests return `503`. Household changes are saved automatically after about 450 ms without typing; the page shows whether the budget is loading, saving, saved, invalid, or unavailable. Monthly history is a separate manual action and never runs as part of this autosave.
+`mise run dev` starts the Erlang backend and the Lustre frontend in parallel. Open `http://localhost:1234`; press `Ctrl-C` to stop both. Development defaults to `127.0.0.1:8080` and permits only `http://localhost:1234` as the browser origin. If `CABANON_DATABASE_URL` is unset or invalid, development still starts but database-backed API requests and `/readyz` return `503`. Household changes are saved automatically after about 450 ms without typing; the page shows whether the budget is loading, saving, saved, invalid, or unavailable. Monthly history is a separate manual action and never runs as part of this autosave.
 
 Run the repository integration tests against the separate test database. They use transactions and roll back their writes; never point the test URL at production or a database containing data you need to keep.
 
@@ -84,7 +84,24 @@ mise run test
 mise run package
 ```
 
-This writes `dist/cabanon-erlang-shipment.tar.gz` and its SHA-256 checksum. The target host needs a compatible Erlang/OTP runtime; it does not need Gleam, Mise, Docker, or Podman.
+This writes `dist/cabanon-erlang-shipment.tar.gz` and its SHA-256 checksum. The target host needs Debian 13 Erlang/OTP `27.3.4.1`; it does not need Gleam, Mise, Docker, or Podman.
+
+For a complete production release bundle, use `./scripts/package-release.sh`. It includes the Erlang shipment, compiled frontend, migrations, systemd unit, installer scripts, manifest, and checksums. CI runs it after verification and security scanning on every successful push to `main`, uploads the resulting archive as a seven-day GitHub Actions artifact, and attaches it to the `main-<short-sha>` GitHub pre-release. The workflow has no deployment credentials and does not deploy the artifact.
+
+## Production configuration
+
+Set `CABANON_ENV=production` only through the root-owned `/etc/cabanon/cabanon.env` created by the installer. Production requires all of the following values and fails closed if the database cannot be initialized:
+
+```text
+CABANON_ENV=production
+CABANON_SECRET_KEY_BASE=<random 64 hexadecimal characters>
+CABANON_DATABASE_URL=postgresql://cabanon_app:<url-encoded-password>@127.0.0.1:5432/cabanon?sslmode=disable
+CABANON_BIND_ADDRESS=<private Cabanon LXC address>
+CABANON_PORT=8080
+CABANON_ALLOWED_ORIGIN=https://cabanon.example.com
+```
+
+`CABANON_BIND_ADDRESS` must be the private address reachable only from Caddy. `CABANON_ALLOWED_ORIGIN` is the exact browser origin: it controls API CORS responses and is required on every `POST`, `PUT`, `PATCH`, and `DELETE` request. The production server serves the bundled frontend, `/healthz` reports process liveness, and `/readyz` verifies PostgreSQL connectivity.
 
 ## Quality gate
 
@@ -106,5 +123,5 @@ Start with the pure modules in `shared/src/cabanon/domain/`; they are ordinary G
 1. write the domain type and a failing unit test;
 2. implement the pure calculation;
 3. add a repository interface and PostgreSQL implementation;
-4. expose it through a narrow web endpoint, then add authentication and authorization before public exposure;
+4. expose it through a narrow web endpoint, protect unsafe requests with the Origin guard, and retain the Pocket ID boundary for the single-user deployment;
 5. add an end-to-end test only where it adds value.

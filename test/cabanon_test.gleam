@@ -2,6 +2,7 @@ import cabanon/domain/construction/budget as construction_budget
 import cabanon/domain/construction/costs as construction_costs
 import cabanon/domain/household/budget as household_budget
 import cabanon/domain/household/money as household_money
+import cabanon/env
 import cabanon/web/router
 import gleam/http
 import gleam/http/response as http_response
@@ -22,6 +23,135 @@ pub fn health_endpoint_returns_ok_test() {
   |> should.equal(200)
   simulate.read_body(response)
   |> should.equal("ok")
+}
+
+pub fn readiness_endpoint_reports_unavailable_without_database_test() {
+  let response = router.handle_request(simulate.request(http.Get, "/readyz"))
+
+  response.status |> should.equal(503)
+  simulate.read_body(response) |> should.equal("database unavailable")
+}
+
+pub fn unsafe_requests_require_the_configured_origin_test() {
+  let missing_origin_response =
+    router.handle_request(simulate.request(
+      http.Post,
+      "/api/construction/categories",
+    ))
+  missing_origin_response.status |> should.equal(403)
+
+  let allowed_request =
+    simulate.request(http.Post, "/api/construction/categories")
+    |> simulate.header("origin", "https://cabanon.example.test")
+  let allowed_response =
+    router.handle_request_with_database_and_origin(
+      allowed_request,
+      None,
+      "https://cabanon.example.test",
+    )
+  allowed_response.status |> should.equal(503)
+  http_response.get_header(allowed_response, "access-control-allow-origin")
+  |> should.equal(Ok("https://cabanon.example.test"))
+}
+
+pub fn production_configuration_requires_explicit_network_and_origin_settings_test() {
+  env.from_values(
+    Some("production"),
+    None,
+    Some("8080"),
+    Some("https://cabanon.example.test"),
+  )
+  |> should.equal(Error(env.MissingProductionSetting("CABANON_BIND_ADDRESS")))
+
+  env.from_values(
+    Some("production"),
+    Some("127.0.0.1"),
+    Some("8080"),
+    Some("https://cabanon.example.test"),
+  )
+  |> should.equal(
+    Ok(env.Config(
+      environment: env.Production,
+      bind_address: "127.0.0.1",
+      port: 8080,
+      allowed_origin: "https://cabanon.example.test",
+    )),
+  )
+}
+
+pub fn development_configuration_uses_safe_defaults_test() {
+  env.from_values(None, None, None, None)
+  |> should.equal(
+    Ok(env.Config(
+      environment: env.Development,
+      bind_address: "127.0.0.1",
+      port: 8080,
+      allowed_origin: "http://localhost:1234",
+    )),
+  )
+  env.frontend_directory(env.Development) |> should.equal(None)
+  env.frontend_directory(env.Production)
+  |> should.equal(Some("/opt/cabanon/current/frontend"))
+
+  let root_response = router.handle_request(simulate.request(http.Get, "/"))
+  root_response.status |> should.equal(404)
+}
+
+pub fn production_frontend_serves_the_index_and_static_assets_test() {
+  let index_response =
+    router.handle_request_with_database_and_origin_and_static(
+      simulate.request(http.Get, "/"),
+      None,
+      "https://cabanon.example.test",
+      Some("test/fixtures/frontend"),
+    )
+  index_response.status |> should.equal(200)
+  simulate.read_body(index_response)
+  |> should.equal("<!doctype html><title>Cabanon test frontend</title>\n")
+
+  let asset_response =
+    router.handle_request_with_database_and_origin_and_static(
+      simulate.request(http.Get, "/cabanon_frontend.js"),
+      None,
+      "https://cabanon.example.test",
+      Some("test/fixtures/frontend"),
+    )
+  asset_response.status |> should.equal(200)
+  simulate.read_body(asset_response)
+  |> should.equal("console.log(\"cabanon test frontend\");\n")
+}
+
+pub fn production_frontend_does_not_intercept_backend_routes_test() {
+  let frontend_directory = Some("test/fixtures/frontend")
+
+  let api_response =
+    router.handle_request_with_database_and_origin_and_static(
+      simulate.request(http.Get, "/api/household"),
+      None,
+      "https://cabanon.example.test",
+      frontend_directory,
+    )
+  api_response.status |> should.equal(503)
+
+  let health_response =
+    router.handle_request_with_database_and_origin_and_static(
+      simulate.request(http.Get, "/healthz"),
+      None,
+      "https://cabanon.example.test",
+      frontend_directory,
+    )
+  health_response.status |> should.equal(200)
+  simulate.read_body(health_response) |> should.equal("ok")
+
+  let readiness_response =
+    router.handle_request_with_database_and_origin_and_static(
+      simulate.request(http.Get, "/readyz"),
+      None,
+      "https://cabanon.example.test",
+      frontend_directory,
+    )
+  readiness_response.status |> should.equal(503)
+  simulate.read_body(readiness_response) |> should.equal("database unavailable")
 }
 
 pub fn construction_api_reports_unavailable_without_database_test() {
