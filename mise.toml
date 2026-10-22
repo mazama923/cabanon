@@ -31,6 +31,10 @@ run = "gleam run"
 description = "Run the Lustre frontend development server"
 run = "cd client && gleam run -m lustre/dev start"
 
+[tasks.dev]
+description = "Run the Erlang backend and Lustre frontend together"
+depends = ["run", "frontend:run"]
+
 [tasks."frontend:check"]
 description = "Type-check and build the Lustre frontend"
 run = "cd client && gleam check && gleam run -m lustre/dev build --outdir=build/ci-preview"

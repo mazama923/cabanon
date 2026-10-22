@@ -3,10 +3,10 @@
 ## Deployment topology
 
 - **Caddy LXC**: public reverse proxy, TLS termination, and access logs.
-- **Application LXC**: systemd-managed Cabanon Erlang shipment on private TCP/8080.
-- **PostgreSQL**: native service in the application LXC, bound to loopback or a Unix socket only.
+- **Application LXC**: intended systemd-managed Cabanon Erlang shipment. The current server binds only to `127.0.0.1:8080` and its construction API has no authentication.
+- **PostgreSQL**: native service in the application LXC, currently accessed over `127.0.0.1` with a dedicated role.
 
-Use a private bridge or VLAN between Caddy and the application LXC. Do not rely on an unadvertised IP address as a security boundary; enforce the allow-list in the Proxmox firewall and inside the application LXC.
+Do not put the current unauthenticated API behind public Caddy or open port 8080 between LXC hosts. Production proxying is a future step after authentication, authorization, CSRF protection, and an explicit configurable bind address are implemented.
 
 ## Application LXC bootstrap
 
@@ -24,7 +24,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable cabanon
 ```
 
-Set `CABANON_SECRET_KEY_BASE` in `/etc/cabanon/cabanon.env` to a unique value generated with `openssl rand -hex 32`.
+Set `CABANON_SECRET_KEY_BASE` to a unique value generated with `openssl rand -hex 32`, and set `CABANON_DATABASE_URL` to the application PostgreSQL role's URL. Keep this environment file at mode `0600`; it contains both the session secret and database credential. The current server remains loopback-only, so this bootstrap is not a public deployment recipe.
 
 ## Release deployment
 
@@ -51,7 +51,7 @@ Keep the previous release directory. Roll back by repointing `/opt/cabanon/curre
 
 ## Caddy requirements
 
-Caddy must proxy only to the private address of the application LXC. Preserve `Host` and forward headers, set a request-body limit appropriate for the application, and enable access logs with rotation. Do not expose a Caddy admin API to the public network.
+Future Caddy configuration must proxy only to the private address of the application LXC. Do not activate the example until the application has authentication, authorization, CSRF protection, and a deliberate non-loopback bind configuration. Preserve `Host` and forward headers, set a request-body limit appropriate for the application, and enable access logs with rotation. Do not expose a Caddy admin API to the public network.
 
 Example upstream shape:
 
@@ -76,7 +76,8 @@ Perform the restore test on a separate database or host. Record the date, durati
 
 ## Readiness checklist
 
-- [ ] Caddy is the only public entry point.
+- [ ] Authentication, authorization, and CSRF protection are implemented before public access is enabled.
+- [ ] Caddy is the only public entry point after the application has been explicitly configured for private upstream access.
 - [ ] PostgreSQL is not listening on a routed interface.
 - [ ] Application secret and database password are stored outside Git and readable only by the service account.
 - [ ] Health check `GET /healthz` is monitored from the private network.

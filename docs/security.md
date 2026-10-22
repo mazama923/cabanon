@@ -8,6 +8,7 @@ Cabanon processes household financial information. Treat it as sensitive even wh
 - Use Argon2id for password hashing when authentication is introduced. Do not implement password crypto manually.
 - Use `Secure`, `HttpOnly`, and `SameSite=Lax` session cookies. Enforce HTTPS before enabling `Secure` cookies.
 - Apply CSRF protection to every state-changing browser request.
+- The construction API is currently unauthenticated and bound to `127.0.0.1:8080` for local development only. Its exact-origin CORS allow-list is not authentication or CSRF protection; do not expose it through a reverse proxy until those controls are implemented.
 - Authorize every query by `household_id`; never trust an identifier supplied by the browser without checking membership.
 - Validate amounts, dates, and ownership on the server. Store money as integer cents.
 - Log security-relevant events without passwords, session identifiers, database URLs, or financial descriptions.

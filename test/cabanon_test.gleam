@@ -4,6 +4,7 @@ import cabanon/domain/household/budget as household_budget
 import cabanon/domain/household/money as household_money
 import cabanon/web/router
 import gleam/http
+import gleam/http/response as http_response
 import gleam/option.{None, Some}
 import gleeunit
 import gleeunit/should
@@ -21,6 +22,25 @@ pub fn health_endpoint_returns_ok_test() {
   |> should.equal(200)
   simulate.read_body(response)
   |> should.equal("ok")
+}
+
+pub fn construction_api_reports_unavailable_without_database_test() {
+  let request =
+    simulate.request(http.Get, "/api/construction")
+    |> simulate.header("origin", "http://localhost:1234")
+  let response = router.handle_request(request)
+
+  response.status |> should.equal(503)
+  http_response.get_header(response, "access-control-allow-origin")
+  |> should.equal(Ok("http://localhost:1234"))
+  simulate.read_body(response)
+  |> should.equal("{\"error\":\"The construction database is unavailable.\"}")
+
+  let household_response =
+    router.handle_request(simulate.request(http.Get, "/api/household"))
+  household_response.status |> should.equal(503)
+  simulate.read_body(household_response)
+  |> should.equal("{\"error\":\"The household database is unavailable.\"}")
 }
 
 pub fn household_split_preserves_every_cent_test() {
