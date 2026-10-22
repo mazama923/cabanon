@@ -1,6 +1,7 @@
 [Unit]
 Description=Cabanon household finance application
 Wants=network-online.target
+Requires=postgresql.service
 After=network-online.target postgresql.service
 
 [Service]

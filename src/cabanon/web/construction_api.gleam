@@ -13,6 +13,7 @@ import wisp
 pub fn handle(
   request: wisp.Request,
   database: pog.Connection,
+  allowed_origin: String,
 ) -> wisp.Response {
   let response = case wisp.path_segments(request) {
     ["api", "construction"] -> construction_index(request, database)
@@ -25,15 +26,18 @@ pub fn handle(
     _ -> wisp.not_found()
   }
 
-  api_response.with_headers(response, request)
+  api_response.with_headers(response, request, allowed_origin)
 }
 
-pub fn unavailable(request: wisp.Request) -> wisp.Response {
+pub fn unavailable(
+  request: wisp.Request,
+  allowed_origin: String,
+) -> wisp.Response {
   let response = case request.method {
     http.Options -> wisp.response(204)
     _ -> json_error(503, "The construction database is unavailable.")
   }
-  api_response.with_headers(response, request)
+  api_response.with_headers(response, request, allowed_origin)
 }
 
 fn construction_index(

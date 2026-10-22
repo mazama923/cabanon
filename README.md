@@ -12,7 +12,9 @@ The application is deliberately a modular monolith: simple to learn, deploy, bac
 
 ## Status
 
-The repository contains an Erlang HTTP server, a Lustre browser client with in-memory household and construction-cost screens, a shared pure domain package, and a PostgreSQL migration plus construction-cost storage adapter. The client can calculate equal household contributions and record actual construction costs by date, description, and category, with totals by category. The browser is not connected to the storage adapter yet, so client data still resets on reload. Authentication, the HTTP API, and serving the production client bundle remain future slices.
+The repository contains an Erlang HTTP server, a Lustre browser client, shared pure domain rules, and PostgreSQL-backed household and construction-cost storage. The production release bundles the frontend and serves it from the Erlang application. Production configuration requires an explicit private bind address, port, browser origin, database URL, and session secret; the service exposes `/healthz` for liveness and `/readyz` for database readiness.
+
+Cabanon is a single-user application behind a Pocket ID-protected Caddy boundary. It has no application-level accounts or roles: Caddy and Pocket ID configuration are operator-managed and must be in place before public exposure. State-changing requests require an exact `Origin` match, and the application listens on its configured private bind address; the operator must restrict its firewall to Caddy.
 
 ## Quick start
 
@@ -42,9 +44,9 @@ mise run ci
 mise tasks
 ```
 
-`mise run package` creates an Erlang shipment archive in `dist/`. Deploy it directly to the application LXC; the target needs Erlang/OTP, but not Gleam, Mise, Docker, or Podman.
+`mise run package` creates an Erlang shipment archive in `dist/` for local packaging checks. Production releases are built by `scripts/package-release.sh` in CI and published as `main-<short-sha>` GitHub pre-releases, including the frontend, migrations, systemd unit, and installer scripts. The Debian 13 target needs Erlang/OTP `27.3.4.1`, but not Gleam, Mise, Docker, or Podman.
 
-See [Development](docs/development.md) for the local PostgreSQL workflow and [Operations](docs/operations.md) for the direct systemd deployment model.
+See [Development](docs/development.md) for the local PostgreSQL workflow and [Operations](docs/operations.md) for installer-based deployment and the remaining operator responsibilities.
 
 ## Repository layout
 
@@ -71,8 +73,8 @@ scripts/           Release packaging scripts
 - Store money as integer cents; never use floating-point amounts.
 - Keep business rules independent from HTTP and PostgreSQL.
 - Use PostgreSQL as the source of truth; no financial record is silently deleted.
-- Expose only Caddy to the Internet; PostgreSQL stays on loopback in the application LXC.
-- Ship a small Erlang release archive supervised by systemd, with explicit backups and restore tests.
+- Expose only Caddy to the Internet; Pocket ID is the single-user authentication boundary, while PostgreSQL stays on loopback in the application LXC.
+- Ship an immutable release bundle supervised by systemd; configure encrypted off-host backups and restore tests before production use.
 
 ## Contributor instructions
 
@@ -85,3 +87,4 @@ Read [AGENTS.md](AGENTS.md) before changing the repository. It gives a compact t
 - [Development](docs/development.md)
 - [Security](docs/security.md)
 - [Production operations](docs/operations.md)
+- [Self-hosting guide](docs/self-hosting.md)

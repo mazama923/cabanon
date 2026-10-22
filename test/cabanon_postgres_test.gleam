@@ -128,6 +128,7 @@ pub fn construction_api_round_trips_categories_and_costs_test() {
                 "{\"people_count\":3,\"account_balance_cents\":5500,\"expenses\":[{\"label\":\"Rent\",\"amount_cents\":120000},{\"label\":\"Electricity\",\"amount_cents\":8500}]}",
               )
               |> request.set_header("content-type", "application/json")
+              |> request.set_header("origin", "http://localhost:1234")
             let household_response =
               router.handle_request_with_database(
                 household_request,
@@ -192,6 +193,7 @@ pub fn construction_api_round_trips_categories_and_costs_test() {
               simulate.request(http.Post, "/api/construction/categories")
               |> simulate.string_body("{\"name\":\"Landscaping\"}")
               |> request.set_header("content-type", "application/json")
+              |> request.set_header("origin", "http://localhost:1234")
             let category_response =
               router.handle_request_with_database(
                 category_request,
@@ -207,6 +209,7 @@ pub fn construction_api_round_trips_categories_and_costs_test() {
                 "{\"incurred_on\":\"2026-06-15\",\"description\":\"Garden paving\",\"category\":\"Landscaping\",\"amount_cents\":12345}",
               )
               |> request.set_header("content-type", "application/json")
+              |> request.set_header("origin", "http://localhost:1234")
             let cost_response =
               router.handle_request_with_database(
                 cost_request,
@@ -236,6 +239,7 @@ pub fn construction_api_round_trips_categories_and_costs_test() {
                 "{\"incurred_on\":\"2026-06-16\",\"description\":\"Garden paving and delivery\",\"category\":\"Construction\",\"amount_cents\":13000,\"reason\":\"Corrected to match the final invoice\"}",
               )
               |> request.set_header("content-type", "application/json")
+              |> request.set_header("origin", "http://localhost:1234")
             let correction_response =
               router.handle_request_with_database(
                 correction_request,
@@ -323,6 +327,7 @@ pub fn household_contribution_history_archives_an_immutable_monthly_snapshot_tes
                 "{\"period\":\"2026-06\",\"people_count\":3,\"account_balance_cents\":5500,\"expenses\":[{\"label\":\"Rent\",\"amount_cents\":120000},{\"label\":\"Electricity\",\"amount_cents\":8500}]}",
               )
               |> request.set_header("content-type", "application/json")
+              |> request.set_header("origin", "http://localhost:1234")
             let archive_response =
               router.handle_request_with_database(
                 archive_request,
@@ -350,6 +355,7 @@ pub fn household_contribution_history_archives_an_immutable_monthly_snapshot_tes
                 "{\"people_count\":2,\"account_balance_cents\":0,\"expenses\":[{\"label\":\"Updated rent\",\"amount_cents\":140000}]}",
               )
               |> request.set_header("content-type", "application/json")
+              |> request.set_header("origin", "http://localhost:1234")
             let update_response =
               router.handle_request_with_database(
                 update_request,

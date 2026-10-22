@@ -11,6 +11,7 @@ import wisp
 pub fn handle(
   request: wisp.Request,
   database: pog.Connection,
+  allowed_origin: String,
 ) -> wisp.Response {
   let response = case request.method {
     http.Options -> wisp.response(204)
@@ -19,12 +20,13 @@ pub fn handle(
     _ -> wisp.method_not_allowed(allowed: [http.Get, http.Put, http.Options])
   }
 
-  api_response.with_headers(response, request)
+  api_response.with_headers(response, request, allowed_origin)
 }
 
 pub fn handle_history(
   request: wisp.Request,
   database: pog.Connection,
+  allowed_origin: String,
 ) -> wisp.Response {
   let response = case request.method {
     http.Options -> wisp.response(204)
@@ -32,15 +34,18 @@ pub fn handle_history(
     http.Post -> archive_history(request, database)
     _ -> wisp.method_not_allowed(allowed: [http.Get, http.Post, http.Options])
   }
-  api_response.with_headers(response, request)
+  api_response.with_headers(response, request, allowed_origin)
 }
 
-pub fn unavailable(request: wisp.Request) -> wisp.Response {
+pub fn unavailable(
+  request: wisp.Request,
+  allowed_origin: String,
+) -> wisp.Response {
   let response = case request.method {
     http.Options -> wisp.response(204)
     _ -> json_error(503, "The household database is unavailable.")
   }
-  api_response.with_headers(response, request)
+  api_response.with_headers(response, request, allowed_origin)
 }
 
 fn load_history(database: pog.Connection) -> wisp.Response {

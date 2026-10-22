@@ -11,14 +11,17 @@ pub fn parse_amount(input: String) -> Result(Int, Nil) {
     "" -> Error(Nil)
     _ ->
       case string.split(normalized, on: ".") {
-        [euros] ->
-          case parse_non_negative_integer(euros) {
-            Ok(euros) -> Ok(euros * 100)
+        [whole_units] ->
+          case parse_non_negative_integer(whole_units) {
+            Ok(whole_units) -> Ok(whole_units * 100)
             Error(Nil) -> Error(Nil)
           }
-        [euros, fractional] ->
-          case parse_non_negative_integer(euros), parse_fractional_cents(fractional) {
-            Ok(euros), Ok(cents) -> Ok(euros * 100 + cents)
+        [whole_units, fractional] ->
+          case
+            parse_non_negative_integer(whole_units),
+            parse_fractional_cents(fractional)
+          {
+            Ok(whole_units), Ok(cents) -> Ok(whole_units * 100 + cents)
             _, _ -> Error(Nil)
           }
         _ -> Error(Nil)

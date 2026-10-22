@@ -2,86 +2,56 @@
 
 ## Deployment topology
 
-- **Caddy LXC**: public reverse proxy, TLS termination, and access logs.
-- **Application LXC**: intended systemd-managed Cabanon Erlang shipment. The current server binds only to `127.0.0.1:8080` and its construction API has no authentication.
-- **PostgreSQL**: native service in the application LXC, currently accessed over `127.0.0.1` with a dedicated role.
+- **Caddy and Pocket ID LXC**: public reverse proxy, TLS termination, access logs, and the single-user authentication boundary.
+- **Application LXC**: systemd-managed Cabanon release, listening on its configured private `CABANON_BIND_ADDRESS:CABANON_PORT` and serving both the API and packaged frontend.
+- **PostgreSQL**: native service in the application LXC, accessed only over `127.0.0.1` with a dedicated role.
 
-Do not put the current unauthenticated API behind public Caddy or open port 8080 between LXC hosts. Production proxying is a future step after authentication, authorization, CSRF protection, and an explicit configurable bind address are implemented.
+Cabanon has no application-level accounts or roles. A production deployment must configure Pocket ID to authenticate the single user before Caddy proxies requests to the application. The application rejects unsafe requests unless their `Origin` exactly matches `CABANON_ALLOWED_ORIGIN`; the network firewall must allow TCP/8080 only from Caddy's private address.
 
 ## Application LXC bootstrap
 
-Install Erlang/OTP from the operating-system package manager. Its major version must match the build environment in `mise.toml` (currently OTP 28). Install PostgreSQL natively and create a non-login service account for Cabanon.
+Install from a downloaded and extracted `main-<short-sha>` GitHub pre-release on a Debian 13 LXC. Run the bundled interactive installer as root:
 
 ```sh
-sudo useradd --system --home-dir /var/lib/cabanon --create-home --shell /usr/sbin/nologin cabanon
-sudo install --directory --owner=root --group=cabanon --mode=0750 /etc/cabanon
-sudo install --directory --owner=root --group=root --mode=0755 /opt/cabanon/releases
-sudo install --directory --owner=cabanon --group=cabanon --mode=0750 /var/lib/cabanon
-sudo install --owner=root --group=root --mode=0644 infra/systemd/cabanon.service /etc/systemd/system/cabanon.service
-sudo install --owner=root --group=root --mode=0600 infra/systemd/cabanon.env.example /etc/cabanon/cabanon.env
-sudoedit /etc/cabanon/cabanon.env
-sudo systemctl daemon-reload
-sudo systemctl enable cabanon
+sudo ./installer/install.sh
 ```
 
-Set `CABANON_SECRET_KEY_BASE` to a unique value generated with `openssl rand -hex 32`, and set `CABANON_DATABASE_URL` to the application PostgreSQL role's URL. Keep this environment file at mode `0600`; it contains both the session secret and database credential. The current server remains loopback-only, so this bootstrap is not a public deployment recipe.
+The installer verifies the bundle checksums and Debian 13 OTP `27.3.4.1`, installs Erlang and PostgreSQL, configures local-only PostgreSQL with SCRAM authentication, creates the `cabanon` service account and database roles, writes `/etc/cabanon/cabanon.env` at mode `0600`, installs the systemd unit, applies migrations, and verifies `/healthz` and `/readyz`.
+
+For a new installation it prompts for the private non-loopback bind address and exact public browser origin, then generates or securely accepts the database password and `CABANON_SECRET_KEY_BASE`. The resulting environment sets `CABANON_ENV=production`, `CABANON_DATABASE_URL`, `CABANON_BIND_ADDRESS`, `CABANON_PORT`, and `CABANON_ALLOWED_ORIGIN`. Preserve this environment file; it contains the application and database secrets.
 
 ## Release deployment
 
-Build the artifact in CI or on a trusted build host:
+Use the `main-<short-sha>` GitHub pre-release produced by the successful CI run. CI runs verification and security scanning, builds the frontend and release bundle, retains it as a seven-day Actions artifact, and attaches it to the pre-release. CI has no deployment credentials and never accesses the application LXC.
+
+For an update, download and extract the release bundle on the application LXC, then run its non-interactive deployment script:
 
 ```sh
-mise run package
-scp dist/cabanon-erlang-shipment.tar.gz dist/cabanon-erlang-shipment.tar.gz.sha256 app-lxc:/tmp/
+sudo ./installer/deploy.sh --release-dir ./cabanon-release-main-<short-sha>
 ```
 
-On the application LXC, verify the checksum, extract an immutable release directory, switch the `current` symlink, then restart systemd:
+`deploy.sh` verifies the bundle and shipment checksums, confirms Debian 13 OTP compatibility, applies pending migrations, installs an immutable release, updates the `current` link atomically, restarts systemd, and waits for `/readyz`. If the new release fails to start or become ready, it restores the preceding release automatically. It does not recreate database roles, overwrite the environment file, or prompt for secrets.
 
-```sh
-cd /tmp
-sha256sum -c cabanon-erlang-shipment.tar.gz.sha256
-sudo install --directory --owner=root --group=root --mode=0755 /opt/cabanon/releases/0.1.0
-sudo tar --no-same-owner -xzf cabanon-erlang-shipment.tar.gz --directory /opt/cabanon/releases/0.1.0 --strip-components=1
-sudo ln -sfn /opt/cabanon/releases/0.1.0 /opt/cabanon/current
-sudo systemctl restart cabanon
-curl --fail http://127.0.0.1:8080/healthz
-```
+## Caddy and Pocket ID requirements
 
-Keep the previous release directory. Roll back by repointing `/opt/cabanon/current` and restarting `cabanon`.
+Caddy and Pocket ID are intentionally outside this repository and remain operator-managed. Before production use, configure Pocket ID to require authentication for every Cabanon route, proxy only to the application LXC's private bind address, preserve `Host` and forwarded headers, and enable TLS, access logs, request limits, and rate limits. Do not expose the Caddy admin API publicly.
 
-## Caddy requirements
-
-Future Caddy configuration must proxy only to the private address of the application LXC. Do not activate the example until the application has authentication, authorization, CSRF protection, and a deliberate non-loopback bind configuration. Preserve `Host` and forward headers, set a request-body limit appropriate for the application, and enable access logs with rotation. Do not expose a Caddy admin API to the public network.
-
-Example upstream shape:
-
-```caddyfile
-budget.example.net {
-    reverse_proxy 10.10.20.10:8080
-}
-```
-
-Use the real private address and domain during deployment. Add rate limiting before exposing authentication endpoints.
+Restrict the application LXC firewall to TCP/8080 from Caddy's private address only. Do not treat the application Origin guard as a replacement for Pocket ID or network filtering.
 
 ## Database backup and recovery
 
-A same-LXC database is not a backup. Schedule encrypted, off-host logical backups and keep a defined retention policy.
+A same-LXC database is not a backup. This repository does not configure automated off-host backups or their credentials. The operator must configure encrypted off-host logical backups, retention, monitoring, and regular restore tests before production use.
 
-```sh
-pg_dump --format=custom --file /var/backups/cabanon/cabanon-$(date +%F).dump cabanon
-pg_restore --clean --if-exists --dbname cabanon_restore /var/backups/cabanon/cabanon-YYYY-MM-DD.dump
-```
-
-Perform the restore test on a separate database or host. Record the date, duration, and result. Also test recovery from a Proxmox snapshot; snapshots alone are not a substitute for off-host backups.
+Perform restore tests on a separate database or host, record their date, duration, and result, and also test recovery from a Proxmox snapshot. Snapshots alone are not a substitute for encrypted off-host backups.
 
 ## Readiness checklist
 
-- [ ] Authentication, authorization, and CSRF protection are implemented before public access is enabled.
-- [ ] Caddy is the only public entry point after the application has been explicitly configured for private upstream access.
+- [ ] Pocket ID protects every public route and Caddy is the only public entry point.
+- [ ] The application LXC firewall allows TCP/8080 only from Caddy's private address.
 - [ ] PostgreSQL is not listening on a routed interface.
-- [ ] Application secret and database password are stored outside Git and readable only by the service account.
-- [ ] Health check `GET /healthz` is monitored from the private network.
+- [ ] Application secret and database password are stored outside Git in `/etc/cabanon/cabanon.env` at mode `0600`.
+- [ ] `/healthz` and `/readyz` are monitored from the private network.
 - [ ] The systemd service runs as `cabanon` and systemd hardening is active.
 - [ ] LXC CPU, memory, disk, and log rotation limits are configured.
 - [ ] Automatic security updates or a regular patch window are configured.
-- [ ] An encrypted backup and a restore test have completed successfully.
+- [ ] Operator-managed encrypted off-host backups and a restore test have completed successfully.
