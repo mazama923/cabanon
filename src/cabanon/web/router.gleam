@@ -18,6 +18,11 @@ pub fn handle_request_with_database(
 
   case wisp.path_segments(request) {
     ["healthz"] -> healthz(request)
+    ["api", "household", "history"] ->
+      case database {
+        Some(database) -> household_api.handle_history(request, database)
+        None -> household_api.unavailable(request)
+      }
     ["api", "household"] ->
       case database {
         Some(database) -> household_api.handle(request, database)
@@ -25,7 +30,9 @@ pub fn handle_request_with_database(
       }
     ["api", "construction"]
     | ["api", "construction", "categories"]
-    | ["api", "construction", "costs"] ->
+    | ["api", "construction", "costs"]
+    | ["api", "construction", "costs", _]
+    | ["api", "construction", "costs", _, "corrections"] ->
       case database {
         Some(database) -> construction_api.handle(request, database)
         None -> construction_api.unavailable(request)

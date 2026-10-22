@@ -30,8 +30,20 @@ type Model {
     balance: String,
     expenses: List(ExpenseLine),
     next_id: Int,
-    construction_costs: List(construction_costs.ActualCost),
+    construction_costs: List(CostRecord),
     construction_categories: List(String),
+    editing_cost_id: Option(String),
+    correction_date: String,
+    correction_description: String,
+    correction_category: String,
+    correction_amount: String,
+    correction_reason: String,
+    correction_form_error: Bool,
+    correction_saving: Bool,
+    correction_history_id: Option(String),
+    cost_corrections: List(CostCorrection),
+    correction_history_loading: Bool,
+    correction_history_error: Bool,
     selected_category: String,
     cost_date: String,
     cost_description: String,
@@ -48,11 +60,34 @@ type Model {
     household_revision: Int,
     household_request_revision: Option(Int),
     household_save_due: Bool,
+    contribution_history: List(ContributionHistoryEntry),
+    history_period: String,
+    history_open_period: Option(String),
+    history_loading: Bool,
+    history_saving: Bool,
+    history_error: String,
   )
 }
 
 type ExpenseLine {
   ExpenseLine(id: Int, label: String, amount: String)
+}
+
+type CostRecord {
+  CostRecord(
+    id: String,
+    cost: construction_costs.ActualCost,
+    correction_count: Int,
+  )
+}
+
+type CostCorrection {
+  CostCorrection(
+    id: String,
+    reason: String,
+    corrected_at: String,
+    previous_cost: construction_costs.ActualCost,
+  )
 }
 
 type HouseholdStatus {
@@ -72,6 +107,9 @@ type Message {
   RemoveExpense(Int)
   ChangePeople(String)
   ChangeBalance(String)
+  ChangeHistoryPeriod(String)
+  SaveContributionHistory
+  ToggleContributionHistory(String)
   ChangeLabel(Int, String)
   ChangeAmount(Int, String)
   ChangeCostDate(String)
@@ -79,25 +117,38 @@ type Message {
   ChangeCostCategory(String)
   ChangeCostAmount(String)
   AddActualCost
+  BeginCostCorrection(String)
+  CancelCostCorrection
+  ChangeCorrectionDate(String)
+  ChangeCorrectionDescription(String)
+  ChangeCorrectionCategory(String)
+  ChangeCorrectionAmount(String)
+  ChangeCorrectionReason(String)
+  SaveCostCorrection
+  ToggleCorrectionHistory(String)
+  CostCorrectionSaved(String, Result(CostRecord, rsvp.Error(String)))
+  CostCorrectionsLoaded(
+    String,
+    Result(List(CostCorrection), rsvp.Error(String)),
+  )
   ShowCategoryForm
   ChangeNewCategory(String)
   SaveCategory
   CancelCategoryForm
   ConstructionLoaded(Result(ConstructionData, rsvp.Error(String)))
-  ConstructionCostSaved(
-    Result(construction_costs.ActualCost, rsvp.Error(String)),
-  )
+  ConstructionCostSaved(Result(CostRecord, rsvp.Error(String)))
   CategorySaved(Result(String, rsvp.Error(String)))
   HouseholdLoaded(Result(HouseholdData, rsvp.Error(String)))
+  ContributionHistoryLoaded(
+    Result(List(ContributionHistoryEntry), rsvp.Error(String)),
+  )
+  ContributionHistorySaved(Result(ContributionHistoryEntry, rsvp.Error(String)))
   HouseholdSaveReady(Int)
   HouseholdSaved(Int, Result(HouseholdData, rsvp.Error(String)))
 }
 
 type ConstructionData {
-  ConstructionData(
-    categories: List(String),
-    costs: List(construction_costs.ActualCost),
-  )
+  ConstructionData(categories: List(String), costs: List(CostRecord))
 }
 
 type HouseholdData {
@@ -112,6 +163,21 @@ type StoredExpense {
   StoredExpense(label: String, amount_cents: Int)
 }
 
+type ContributionHistoryEntry {
+  ContributionHistoryEntry(
+    period: String,
+    people_count: Int,
+    account_balance_cents: Int,
+    expenses_total_cents: Int,
+    balance_applied_cents: Int,
+    remaining_balance_cents: Int,
+    contribution_total_cents: Int,
+    base_share_cents: Int,
+    residents_paying_one_extra_cent: Int,
+    expenses: List(StoredExpense),
+  )
+}
+
 type CalculationProblem {
   InvalidPeople
   InvalidExpense
@@ -121,6 +187,8 @@ type CalculationProblem {
 const construction_api_url = "http://localhost:8080/api/construction"
 
 const household_api_url = "http://localhost:8080/api/household"
+
+const household_history_api_url = "http://localhost:8080/api/household/history"
 
 pub fn main() {
   let app = lustre.application(init, update, view)
@@ -138,6 +206,18 @@ fn init(_flags: Nil) -> #(Model, Effect(Message)) {
       next_id: 2,
       construction_costs: [],
       construction_categories: [],
+      editing_cost_id: None,
+      correction_date: "",
+      correction_description: "",
+      correction_category: "",
+      correction_amount: "",
+      correction_reason: "",
+      correction_form_error: False,
+      correction_saving: False,
+      correction_history_id: None,
+      cost_corrections: [],
+      correction_history_loading: False,
+      correction_history_error: False,
       selected_category: "",
       cost_date: "",
       cost_description: "",
@@ -154,6 +234,12 @@ fn init(_flags: Nil) -> #(Model, Effect(Message)) {
       household_revision: 0,
       household_request_revision: None,
       household_save_due: False,
+      contribution_history: [],
+      history_period: "",
+      history_open_period: None,
+      history_loading: True,
+      history_saving: False,
+      history_error: "",
     )
   let load_construction =
     rsvp.get(
@@ -169,7 +255,14 @@ fn init(_flags: Nil) -> #(Model, Effect(Message)) {
         HouseholdLoaded(result)
       }),
     )
-  #(model, effect.batch([load_construction, load_household]))
+  let load_history =
+    rsvp.get(
+      household_history_api_url,
+      rsvp.expect_json(decode.list(contribution_history_decoder()), fn(result) {
+        ContributionHistoryLoaded(result)
+      }),
+    )
+  #(model, effect.batch([load_construction, load_household, load_history]))
 }
 
 fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
@@ -196,6 +289,19 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
     ChangePeople(people) -> household_changed(Model(..model, people: people))
     ChangeBalance(balance) ->
       household_changed(Model(..model, balance: balance))
+    ChangeHistoryPeriod(period) ->
+      no_effect(Model(..model, history_period: period, history_error: ""))
+    SaveContributionHistory -> save_contribution_history(model)
+    ToggleContributionHistory(period) ->
+      no_effect(
+        Model(
+          ..model,
+          history_open_period: case model.history_open_period == Some(period) {
+            True -> None
+            False -> Some(period)
+          },
+        ),
+      )
     ChangeLabel(id, label) ->
       household_changed(
         Model(
@@ -227,6 +333,41 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
     ChangeCostAmount(amount) ->
       no_effect(Model(..model, cost_amount: amount, cost_form_error: False))
     AddActualCost -> add_actual_cost(model)
+    BeginCostCorrection(id) -> begin_cost_correction(model, id)
+    CancelCostCorrection -> no_effect(clear_cost_correction_form(model))
+    ChangeCorrectionDate(date) ->
+      no_effect(
+        Model(..model, correction_date: date, correction_form_error: False),
+      )
+    ChangeCorrectionDescription(description) ->
+      no_effect(
+        Model(
+          ..model,
+          correction_description: description,
+          correction_form_error: False,
+        ),
+      )
+    ChangeCorrectionCategory(category) ->
+      no_effect(
+        Model(
+          ..model,
+          correction_category: category,
+          correction_form_error: False,
+        ),
+      )
+    ChangeCorrectionAmount(amount) ->
+      no_effect(
+        Model(..model, correction_amount: amount, correction_form_error: False),
+      )
+    ChangeCorrectionReason(reason) ->
+      no_effect(
+        Model(..model, correction_reason: reason, correction_form_error: False),
+      )
+    SaveCostCorrection -> save_cost_correction(model)
+    ToggleCorrectionHistory(id) -> toggle_correction_history(model, id)
+    CostCorrectionSaved(id, result) -> cost_correction_saved(model, id, result)
+    CostCorrectionsLoaded(id, result) ->
+      cost_corrections_loaded(model, id, result)
     ShowCategoryForm -> no_effect(Model(..model, category_form_open: True))
     ChangeNewCategory(category) ->
       no_effect(Model(..model, new_category: category))
@@ -329,10 +470,184 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
           household_ready: False,
         ),
       )
+    ContributionHistoryLoaded(Ok(entries)) ->
+      no_effect(
+        Model(
+          ..model,
+          contribution_history: entries,
+          history_loading: False,
+          history_error: "",
+        ),
+      )
+    ContributionHistoryLoaded(Error(_)) ->
+      no_effect(
+        Model(
+          ..model,
+          history_loading: False,
+          history_error: "Contribution history could not be loaded. Check the server and database, then reload.",
+        ),
+      )
+    ContributionHistorySaved(result) ->
+      contribution_history_saved(model, result)
     HouseholdSaveReady(revision) -> household_save_ready(model, revision)
     HouseholdSaved(revision, result) ->
       household_save_completed(model, revision, result)
   }
+}
+
+fn save_contribution_history(model: Model) -> #(Model, Effect(Message)) {
+  case can_archive_contributions(model) {
+    False -> no_effect(model)
+    True ->
+      case household_data(model) {
+        Error(Nil) -> no_effect(model)
+        Ok(data) -> {
+          let save =
+            rsvp.post(
+              household_history_api_url,
+              contribution_archive_to_json(model.history_period, data),
+              rsvp.expect_json(contribution_history_decoder(), fn(result) {
+                ContributionHistorySaved(result)
+              }),
+            )
+          #(Model(..model, history_saving: True, history_error: ""), save)
+        }
+      }
+  }
+}
+
+fn contribution_history_saved(
+  model: Model,
+  result: Result(ContributionHistoryEntry, rsvp.Error(String)),
+) -> #(Model, Effect(Message)) {
+  case result {
+    Error(_) ->
+      no_effect(
+        Model(
+          ..model,
+          history_saving: False,
+          history_error: "This month could not be archived. Your current budget is unchanged; check the server and try again.",
+        ),
+      )
+    Ok(entry) -> {
+      let entries =
+        list.append(model.contribution_history, [entry])
+        |> list.sort(fn(left, right) {
+          string.compare(right.period, left.period)
+        })
+      no_effect(
+        Model(
+          ..model,
+          contribution_history: entries,
+          history_open_period: Some(entry.period),
+          history_saving: False,
+          history_error: "",
+        ),
+      )
+    }
+  }
+}
+
+fn can_archive_contributions(model: Model) -> Bool {
+  case
+    model.household_ready
+    && !model.history_loading
+    && !model.history_saving
+    && history_period_is_valid(model.history_period)
+    && !history_period_exists(model.contribution_history, model.history_period)
+  {
+    False -> False
+    True ->
+      case calculate_plan(model) {
+        Ok(_) -> True
+        Error(_) -> False
+      }
+  }
+}
+
+fn history_period_exists(
+  entries: List(ContributionHistoryEntry),
+  period: String,
+) -> Bool {
+  case entries {
+    [] -> False
+    [ContributionHistoryEntry(saved_period, ..), ..rest] ->
+      saved_period == period || history_period_exists(rest, period)
+  }
+}
+
+fn history_period_is_valid(period: String) -> Bool {
+  case string.split(period, on: "-") {
+    [year, month] ->
+      case string.length(year) == 4 && string.length(month) == 2 {
+        False -> False
+        True ->
+          case int.parse(year), int.parse(month) {
+            Ok(year_number), Ok(month_number) ->
+              year_number > 0 && month_number >= 1 && month_number <= 12
+            _, _ -> False
+          }
+      }
+    _ -> False
+  }
+}
+
+fn contribution_archive_to_json(
+  period: String,
+  data: HouseholdData,
+) -> json.Json {
+  let HouseholdData(people_count, account_balance_cents, expenses) = data
+  let expenses =
+    list.map(expenses, fn(expense) {
+      let StoredExpense(label:, amount_cents:) = expense
+      json.object([
+        #("label", json.string(label)),
+        #("amount_cents", json.int(amount_cents)),
+      ])
+    })
+  json.object([
+    #("period", json.string(period)),
+    #("people_count", json.int(people_count)),
+    #("account_balance_cents", json.int(account_balance_cents)),
+    #("expenses", json.array(from: expenses, of: fn(value) { value })),
+  ])
+}
+
+fn contribution_history_decoder() -> decode.Decoder(ContributionHistoryEntry) {
+  use period <- decode.field("period", decode.string)
+  use people_count <- decode.field("people_count", decode.int)
+  use account_balance_cents <- decode.field("account_balance_cents", decode.int)
+  use expenses_total_cents <- decode.field("expenses_total_cents", decode.int)
+  use balance_applied_cents <- decode.field("balance_applied_cents", decode.int)
+  use remaining_balance_cents <- decode.field(
+    "remaining_balance_cents",
+    decode.int,
+  )
+  use contribution_total_cents <- decode.field(
+    "contribution_total_cents",
+    decode.int,
+  )
+  use base_share_cents <- decode.field("base_share_cents", decode.int)
+  use residents_paying_one_extra_cent <- decode.field(
+    "residents_paying_one_extra_cent",
+    decode.int,
+  )
+  use expenses <- decode.field(
+    "expenses",
+    decode.list(stored_expense_decoder()),
+  )
+  decode.success(ContributionHistoryEntry(
+    period:,
+    people_count:,
+    account_balance_cents:,
+    expenses_total_cents:,
+    balance_applied_cents:,
+    remaining_balance_cents:,
+    contribution_total_cents:,
+    base_share_cents:,
+    residents_paying_one_extra_cent:,
+    expenses:,
+  ))
 }
 
 fn no_effect(model: Model) -> #(Model, Effect(Message)) {
@@ -639,7 +954,7 @@ fn add_actual_cost(model: Model) -> #(Model, Effect(Message)) {
                 rsvp.post(
                   construction_api_url <> "/costs",
                   body,
-                  rsvp.expect_json(actual_cost_decoder(), fn(result) {
+                  rsvp.expect_json(cost_record_decoder(), fn(result) {
                     ConstructionCostSaved(result)
                   }),
                 )
@@ -649,6 +964,241 @@ fn add_actual_cost(model: Model) -> #(Model, Effect(Message)) {
         }
       }
   }
+}
+
+fn begin_cost_correction(
+  model: Model,
+  id: String,
+) -> #(Model, Effect(Message)) {
+  case find_cost_record(model.construction_costs, id) {
+    None -> no_effect(model)
+    Some(CostRecord(_, cost, _)) -> {
+      let construction_costs.ActualCost(
+        incurred_on:,
+        description:,
+        category:,
+        amount_cents:,
+      ) = cost
+      no_effect(
+        Model(
+          ..model,
+          editing_cost_id: Some(id),
+          correction_date: incurred_on,
+          correction_description: description,
+          correction_category: category,
+          correction_amount: display_amount_input(amount_cents),
+          correction_reason: "",
+          correction_form_error: False,
+          api_error: "",
+        ),
+      )
+    }
+  }
+}
+
+fn clear_cost_correction_form(model: Model) -> Model {
+  Model(
+    ..model,
+    editing_cost_id: None,
+    correction_date: "",
+    correction_description: "",
+    correction_category: "",
+    correction_amount: "",
+    correction_reason: "",
+    correction_form_error: False,
+  )
+}
+
+fn save_cost_correction(model: Model) -> #(Model, Effect(Message)) {
+  case model.correction_saving {
+    True -> no_effect(model)
+    False ->
+      case model.editing_cost_id {
+        None -> no_effect(model)
+        Some(id) ->
+          case cost_amount_cents(model.correction_amount) {
+            Error(Nil) -> no_effect(Model(..model, correction_form_error: True))
+            Ok(amount_cents) -> {
+              let cost =
+                construction_costs.ActualCost(
+                  incurred_on: string.trim(model.correction_date),
+                  description: string.trim(model.correction_description),
+                  category: string.trim(model.correction_category),
+                  amount_cents:,
+                )
+              case string.trim(model.correction_reason) == "" {
+                True -> no_effect(Model(..model, correction_form_error: True))
+                False ->
+                  case construction_costs.summarise_actual_costs([cost]) {
+                    Error(_) ->
+                      no_effect(Model(..model, correction_form_error: True))
+                    Ok(_) -> {
+                      let construction_costs.ActualCost(
+                        incurred_on:,
+                        description:,
+                        category:,
+                        amount_cents:,
+                      ) = cost
+                      let body =
+                        json.object([
+                          #("incurred_on", json.string(incurred_on)),
+                          #("description", json.string(description)),
+                          #("category", json.string(category)),
+                          #("amount_cents", json.int(amount_cents)),
+                          #(
+                            "reason",
+                            json.string(string.trim(model.correction_reason)),
+                          ),
+                        ])
+                      let save =
+                        rsvp.put(
+                          construction_api_url <> "/costs/" <> id,
+                          body,
+                          rsvp.expect_json(cost_record_decoder(), fn(result) {
+                            CostCorrectionSaved(id, result)
+                          }),
+                        )
+                      #(
+                        Model(..model, correction_saving: True, api_error: ""),
+                        save,
+                      )
+                    }
+                  }
+              }
+            }
+          }
+      }
+  }
+}
+
+fn cost_correction_saved(
+  model: Model,
+  id: String,
+  result: Result(CostRecord, rsvp.Error(String)),
+) -> #(Model, Effect(Message)) {
+  case result {
+    Error(_) ->
+      no_effect(
+        Model(
+          ..model,
+          correction_saving: False,
+          api_error: "The correction could not be saved. The original entry is unchanged; check the server and try again.",
+        ),
+      )
+    Ok(record) -> {
+      let model =
+        Model(
+          ..model,
+          construction_costs: update_cost_record(
+            model.construction_costs,
+            id,
+            record,
+          ),
+          correction_saving: False,
+          api_error: "",
+        )
+        |> clear_cost_correction_form
+      case model.correction_history_id == Some(id) {
+        True -> load_cost_corrections(model, id)
+        False -> no_effect(model)
+      }
+    }
+  }
+}
+
+fn toggle_correction_history(
+  model: Model,
+  id: String,
+) -> #(Model, Effect(Message)) {
+  case model.correction_history_id == Some(id) {
+    True ->
+      no_effect(
+        Model(
+          ..model,
+          correction_history_id: None,
+          cost_corrections: [],
+          correction_history_error: False,
+        ),
+      )
+    False -> load_cost_corrections(model, id)
+  }
+}
+
+fn load_cost_corrections(
+  model: Model,
+  id: String,
+) -> #(Model, Effect(Message)) {
+  let load =
+    rsvp.get(
+      construction_api_url <> "/costs/" <> id <> "/corrections",
+      rsvp.expect_json(decode.list(cost_correction_decoder()), fn(result) {
+        CostCorrectionsLoaded(id, result)
+      }),
+    )
+  #(
+    Model(
+      ..model,
+      correction_history_id: Some(id),
+      cost_corrections: [],
+      correction_history_loading: True,
+      correction_history_error: False,
+    ),
+    load,
+  )
+}
+
+fn cost_corrections_loaded(
+  model: Model,
+  id: String,
+  result: Result(List(CostCorrection), rsvp.Error(String)),
+) -> #(Model, Effect(Message)) {
+  case model.correction_history_id == Some(id) {
+    False -> no_effect(model)
+    True ->
+      case result {
+        Ok(corrections) ->
+          no_effect(
+            Model(
+              ..model,
+              cost_corrections: corrections,
+              correction_history_loading: False,
+              correction_history_error: False,
+            ),
+          )
+        Error(_) ->
+          no_effect(
+            Model(
+              ..model,
+              correction_history_loading: False,
+              correction_history_error: True,
+            ),
+          )
+      }
+  }
+}
+
+fn find_cost_record(costs: List(CostRecord), id: String) -> Option(CostRecord) {
+  case costs {
+    [] -> None
+    [CostRecord(record_id, cost, correction_count), ..rest] ->
+      case record_id == id {
+        True -> Some(CostRecord(record_id, cost, correction_count))
+        False -> find_cost_record(rest, id)
+      }
+  }
+}
+
+fn update_cost_record(
+  costs: List(CostRecord),
+  id: String,
+  updated: CostRecord,
+) -> List(CostRecord) {
+  list.map(costs, fn(record) {
+    case record {
+      CostRecord(record_id, _, _) if record_id == id -> updated
+      _ -> record
+    }
+  })
 }
 
 fn save_category(model: Model) -> #(Model, Effect(Message)) {
@@ -676,8 +1226,33 @@ fn save_category(model: Model) -> #(Model, Effect(Message)) {
 
 fn construction_data_decoder() -> decode.Decoder(ConstructionData) {
   use categories <- decode.field("categories", decode.list(decode.string))
-  use costs <- decode.field("costs", decode.list(actual_cost_decoder()))
+  use costs <- decode.field("costs", decode.list(cost_record_decoder()))
   decode.success(ConstructionData(categories:, costs:))
+}
+
+fn cost_record_decoder() -> decode.Decoder(CostRecord) {
+  use id <- decode.field("id", decode.string)
+  use incurred_on <- decode.field("incurred_on", decode.string)
+  use description <- decode.field("description", decode.string)
+  use category <- decode.field("category", decode.string)
+  use amount_cents <- decode.field("amount_cents", decode.int)
+  use correction_count <- decode.field("correction_count", decode.int)
+  let cost =
+    construction_costs.ActualCost(
+      incurred_on:,
+      description:,
+      category:,
+      amount_cents:,
+    )
+  decode.success(CostRecord(id, cost, correction_count))
+}
+
+fn cost_correction_decoder() -> decode.Decoder(CostCorrection) {
+  use id <- decode.field("id", decode.string)
+  use reason <- decode.field("reason", decode.string)
+  use corrected_at <- decode.field("corrected_at", decode.string)
+  use previous_cost <- decode.field("previous_cost", actual_cost_decoder())
+  decode.success(CostCorrection(id, reason, corrected_at, previous_cost))
 }
 
 fn actual_cost_decoder() -> decode.Decoder(construction_costs.ActualCost) {
@@ -930,9 +1505,439 @@ fn view_household(model: Model) -> Element(Message) {
         ]),
       ]),
     ]),
+    view_contribution_history(model),
     html.footer([class("page-footer")], [
       html.text("A shared budget everyone can understand."),
     ]),
+  ])
+}
+
+fn view_contribution_history(model: Model) -> Element(Message) {
+  let already_archived =
+    history_period_exists(model.contribution_history, model.history_period)
+  let period_note = contribution_archive_note(model, already_archived)
+  let save_disabled = !can_archive_contributions(model)
+  let save_label = case model.history_saving {
+    True -> "Saving this month..."
+    False -> "Save this month"
+  }
+  let feedback = case model.history_error {
+    "" -> html.text("")
+    message ->
+      html.p([class("field-error form-error"), attribute("role", "alert")], [
+        html.text(message),
+      ])
+  }
+  let history_rows = case model.history_loading {
+    True -> [
+      html.p([class("summary-note")], [
+        html.text("Loading contribution history..."),
+      ]),
+    ]
+    False ->
+      case model.contribution_history {
+        [] -> [
+          html.div([class("empty-state")], [
+            html.h3([], [html.text("No months archived yet")]),
+            html.p([], [
+              html.text("Your saved monthly calculations will appear here."),
+            ]),
+          ]),
+        ]
+        entries ->
+          list.map(entries, fn(entry) {
+            view_contribution_history_entry(entry, model.history_open_period)
+          })
+      }
+  }
+
+  html.section([class("expense-panel history-panel contribution-history")], [
+    html.div([class("panel-heading")], [
+      html.div([], [
+        html.p([class("eyebrow eyebrow-dark")], [
+          html.text("MONTHLY RECORDS"),
+        ]),
+        html.h2([], [html.text("Contribution history")]),
+      ]),
+      html.p([class("panel-hint")], [
+        html.text(
+          "Choose a month below to save a reviewed snapshot that autosave will not change.",
+        ),
+      ]),
+    ]),
+    html.div([class("history-save-form")], [
+      html.div([class("field history-period-field")], [
+        html.label([class("field-label"), attribute("for", "history-period")], [
+          html.text("Month to archive"),
+        ]),
+        html.input([
+          class("text-input"),
+          attribute("id", "history-period"),
+          attribute(
+            "aria-describedby",
+            "history-period-help history-period-note",
+          ),
+          type_("month"),
+          value(model.history_period),
+          disabled(model.history_saving || model.history_loading),
+          event.on_input(ChangeHistoryPeriod),
+        ]),
+        html.p(
+          [
+            class("field-hint history-period-instructions"),
+            attribute("id", "history-period-help"),
+          ],
+          [
+            html.text(
+              "Select a year and month. If no picker appears, enter YYYY-MM, for example 2026-06.",
+            ),
+          ],
+        ),
+        html.p(
+          [
+            class("field-hint history-period-status"),
+            attribute("id", "history-period-note"),
+            attribute("aria-live", "polite"),
+          ],
+          [html.text(period_note)],
+        ),
+      ]),
+      html.button(
+        [
+          class("add-button history-save-button"),
+          type_("button"),
+          disabled(save_disabled),
+          event.on_click(SaveContributionHistory),
+        ],
+        [html.text(save_label)],
+      ),
+    ]),
+    feedback,
+    view_contribution_comparison(model),
+    html.div([class("contribution-history-list")], history_rows),
+  ])
+}
+
+fn view_contribution_comparison(model: Model) -> Element(Message) {
+  let content = case model.history_loading {
+    True ->
+      html.p([class("summary-note")], [
+        html.text("Loading archived months..."),
+      ])
+    False ->
+      case model.contribution_history {
+        [] ->
+          html.p([class("summary-note")], [
+            html.text("Save a monthly snapshot to start comparing periods."),
+          ])
+        entries ->
+          html.div([], [
+            html.p([class("comparison-scroll-note")], [
+              html.text("Scroll horizontally to see all comparison values."),
+            ]),
+            html.div(
+              [
+                class("comparison-table-wrap"),
+                attribute("role", "region"),
+                attribute("aria-label", "Monthly contribution comparison"),
+                attribute("tabindex", "0"),
+              ],
+              [
+                html.table([class("comparison-table")], [
+                  html.thead([], [
+                    html.tr([], [
+                      html.th([attribute("scope", "col")], [html.text("Month")]),
+                      html.th([attribute("scope", "col")], [
+                        html.text("Expenses"),
+                      ]),
+                      html.th([attribute("scope", "col")], [
+                        html.text("Balance used"),
+                      ]),
+                      html.th([attribute("scope", "col")], [
+                        html.text("Contributions"),
+                      ]),
+                      html.th([attribute("scope", "col")], [
+                        html.text("Base share / person"),
+                      ]),
+                    ]),
+                  ]),
+                  html.tbody([], contribution_comparison_rows(entries)),
+                ]),
+              ],
+            ),
+          ])
+      }
+  }
+  html.section([class("comparison-section")], [
+    html.div([class("comparison-heading")], [
+      html.h3([], [html.text("Compare months")]),
+      html.p([], [
+        html.text(
+          "Each change is measured against the closest earlier archived month.",
+        ),
+      ]),
+    ]),
+    content,
+  ])
+}
+
+fn contribution_comparison_rows(
+  entries: List(ContributionHistoryEntry),
+) -> List(Element(Message)) {
+  case entries {
+    [] -> []
+    [entry] -> [view_contribution_comparison_row(entry, None)]
+    [entry, previous, ..rest] -> [
+      view_contribution_comparison_row(entry, Some(previous)),
+      ..contribution_comparison_rows([previous, ..rest])
+    ]
+  }
+}
+
+fn view_contribution_comparison_row(
+  entry: ContributionHistoryEntry,
+  previous: Option(ContributionHistoryEntry),
+) -> Element(Message) {
+  let ContributionHistoryEntry(
+    period,
+    people_count,
+    _,
+    expenses_total_cents,
+    balance_applied_cents,
+    _,
+    contribution_total_cents,
+    base_share_cents,
+    residents_paying_one_extra_cent,
+    _,
+  ) = entry
+  let previous_values = case previous {
+    None -> #(None, None, None, None)
+    Some(ContributionHistoryEntry(
+      _,
+      _,
+      _,
+      previous_expenses_total_cents,
+      previous_balance_applied_cents,
+      _,
+      previous_contribution_total_cents,
+      previous_base_share_cents,
+      _,
+      _,
+    )) -> #(
+      Some(previous_expenses_total_cents),
+      Some(previous_balance_applied_cents),
+      Some(previous_contribution_total_cents),
+      Some(previous_base_share_cents),
+    )
+  }
+  let #(
+    previous_expenses,
+    previous_balance,
+    previous_contributions,
+    previous_share,
+  ) = previous_values
+  let extra_cent_note = case residents_paying_one_extra_cent {
+    0 -> "No extra-cent shares"
+    1 -> "1 person pays +0.01 €"
+    count -> int.to_string(count) <> " people pay +0.01 €"
+  }
+  html.tr([], [
+    html.th([attribute("scope", "row"), class("comparison-period")], [
+      html.text(period),
+    ]),
+    comparison_value_cell(expenses_total_cents, previous_expenses, ""),
+    comparison_value_cell(balance_applied_cents, previous_balance, ""),
+    comparison_value_cell(contribution_total_cents, previous_contributions, ""),
+    comparison_value_cell(
+      base_share_cents,
+      previous_share,
+      int.to_string(people_count) <> " people · " <> extra_cent_note,
+    ),
+  ])
+}
+
+fn comparison_value_cell(
+  value: Int,
+  previous: Option(Int),
+  note: String,
+) -> Element(Message) {
+  let comparison = case previous {
+    None -> "First archived month"
+    Some(previous_value) ->
+      "vs previous: " <> signed_money(value - previous_value)
+  }
+  html.td([class("comparison-value-cell")], [
+    html.span([class("comparison-value")], [html.text(format_money(value))]),
+    html.span([class("comparison-change")], [html.text(comparison)]),
+    case note {
+      "" -> html.text("")
+      _ -> html.span([class("comparison-note")], [html.text(note)])
+    },
+  ])
+}
+
+fn signed_money(cents: Int) -> String {
+  case cents > 0 {
+    True -> "+" <> format_money(cents)
+    False ->
+      case cents < 0 {
+        True -> "−" <> format_money(0 - cents)
+        False -> "No change"
+      }
+  }
+}
+
+fn contribution_archive_note(model: Model, already_archived: Bool) -> String {
+  case model.history_loading {
+    True -> "Loading saved months..."
+    False ->
+      case model.household_ready {
+        False -> "Wait for the current household budget to load."
+        True ->
+          case string.trim(model.history_period) == "" {
+            True -> "Choose a month to enable saving."
+            False ->
+              case history_period_is_valid(model.history_period) {
+                False -> "Choose a valid month."
+                True ->
+                  case already_archived {
+                    True ->
+                      "This month is already archived and cannot be replaced."
+                    False ->
+                      case calculate_plan(model) {
+                        Error(InvalidPeople) ->
+                          "Enter at least one person in the household."
+                        Error(InvalidExpense) ->
+                          "Correct the invalid expense amounts before saving."
+                        Error(InvalidBalance) ->
+                          "Enter a valid, non-negative account balance."
+                        Ok(_) ->
+                          case model.history_saving {
+                            True -> "Saving this month's snapshot..."
+                            False ->
+                              "Ready to save. Later budget edits will not change this snapshot."
+                          }
+                      }
+                  }
+              }
+          }
+      }
+  }
+}
+
+fn view_contribution_history_entry(
+  entry: ContributionHistoryEntry,
+  open_period: Option(String),
+) -> Element(Message) {
+  let ContributionHistoryEntry(
+    period,
+    people_count,
+    account_balance_cents,
+    expenses_total_cents,
+    balance_applied_cents,
+    remaining_balance_cents,
+    contribution_total_cents,
+    base_share_cents,
+    residents_paying_one_extra_cent,
+    expenses,
+  ) = entry
+  let is_open = open_period == Some(period)
+  let details = case is_open {
+    False -> html.text("")
+    True -> {
+      let expense_rows = case expenses {
+        [] -> [
+          html.p([class("summary-note")], [html.text("No expenses recorded.")]),
+        ]
+        lines ->
+          list.map(lines, fn(expense) {
+            let StoredExpense(label, amount_cents) = expense
+            html.div([class("history-expense-row")], [
+              html.span([], [
+                html.text(case string.trim(label) {
+                  "" -> "Unlabelled expense"
+                  label -> label
+                }),
+              ]),
+              html.span([class("history-expense-amount")], [
+                html.text(format_money(amount_cents)),
+              ]),
+            ])
+          })
+      }
+      let extra_cent_note = case residents_paying_one_extra_cent {
+        0 -> "No extra cent is needed."
+        1 -> "1 person pays one extra cent."
+        count -> int.to_string(count) <> " people pay one extra cent each."
+      }
+      html.div([class("history-entry-details")], [
+        html.div([class("history-metrics")], [
+          view_history_metric("People", int.to_string(people_count)),
+          view_history_metric(
+            "Total expenses",
+            format_money(expenses_total_cents),
+          ),
+          view_history_metric(
+            "Balance used",
+            format_money(balance_applied_cents),
+          ),
+          view_history_metric(
+            "Balance remaining",
+            format_money(remaining_balance_cents),
+          ),
+          view_history_metric(
+            "Contributions",
+            format_money(contribution_total_cents),
+          ),
+          view_history_metric("Equal share", format_money(base_share_cents)),
+        ]),
+        html.p([class("field-hint")], [
+          html.text(
+            "Available balance: "
+            <> format_money(account_balance_cents)
+            <> " · "
+            <> extra_cent_note,
+          ),
+        ]),
+        html.div([class("history-expense-list")], expense_rows),
+      ])
+    }
+  }
+  html.article([class("history-entry")], [
+    html.button(
+      [
+        class("history-entry-toggle"),
+        type_("button"),
+        attribute("aria-expanded", case is_open {
+          True -> "true"
+          False -> "false"
+        }),
+        event.on_click(ToggleContributionHistory(period)),
+      ],
+      [
+        html.span([class("history-entry-period")], [html.text(period)]),
+        html.span([class("history-entry-total")], [
+          html.text(format_money(contribution_total_cents) <> " to contribute"),
+        ]),
+        html.span(
+          [class("history-entry-indicator"), attribute("aria-hidden", "true")],
+          [
+            html.text(case is_open {
+              True -> "−"
+              False -> "+"
+            }),
+          ],
+        ),
+      ],
+    ),
+    details,
+  ])
+}
+
+fn view_history_metric(label: String, amount: String) -> Element(Message) {
+  html.div([class("history-metric")], [
+    html.p([class("history-metric-label")], [html.text(label)]),
+    html.p([class("history-metric-value")], [html.text(amount)]),
   ])
 }
 
@@ -982,8 +1987,12 @@ fn view_navigation(section: Section) -> Element(Message) {
 }
 
 fn view_construction(model: Model) -> Element(Message) {
-  let summary =
-    construction_costs.summarise_actual_costs(model.construction_costs)
+  let actual_costs =
+    list.map(model.construction_costs, fn(record) {
+      let CostRecord(_, cost, _) = record
+      cost
+    })
+  let summary = construction_costs.summarise_actual_costs(actual_costs)
   let total = case summary {
     Ok(construction_costs.ActualCostSummary(total_cents, _)) ->
       format_money(total_cents)
@@ -1005,7 +2014,9 @@ fn view_construction(model: Model) -> Element(Message) {
     Error(_) -> []
   }
   let sorted_costs =
-    list.sort(model.construction_costs, fn(left, right) {
+    list.sort(model.construction_costs, fn(left_record, right_record) {
+      let CostRecord(_, left, _) = left_record
+      let CostRecord(_, right, _) = right_record
       string.compare(right.incurred_on, left.incurred_on)
     })
   let cost_rows = case sorted_costs {
@@ -1030,7 +2041,7 @@ fn view_construction(model: Model) -> Element(Message) {
           ]),
         ]
       }
-    costs -> list.map(costs, view_actual_cost)
+    costs -> list.map(costs, fn(record) { view_actual_cost(record, model) })
   }
   let description_class = case
     model.cost_form_error && string.trim(model.cost_description) == ""
@@ -1306,18 +2317,269 @@ fn view_category_total(
   ])
 }
 
-fn view_actual_cost(cost: construction_costs.ActualCost) -> Element(Message) {
-  let construction_costs.ActualCost(date, description, category, amount_cents) =
-    cost
-  html.article([class("cost-entry")], [
-    html.div([class("cost-entry-main")], [
-      html.div([class("cost-entry-meta")], [
-        html.span([class("cost-date")], [html.text(date)]),
-        html.span([class("category-chip")], [html.text(category)]),
+fn view_actual_cost(record: CostRecord, model: Model) -> Element(Message) {
+  let CostRecord(id, cost, correction_count) = record
+  case model.editing_cost_id == Some(id) {
+    True ->
+      html.article([class("cost-entry cost-entry-editing")], [
+        view_cost_correction_form(model, id),
+      ])
+    False -> {
+      let construction_costs.ActualCost(
+        incurred_on:,
+        description:,
+        category:,
+        amount_cents:,
+      ) = cost
+      let correction_badge = case correction_count > 0 {
+        True -> html.span([class("correction-chip")], [html.text("Corrected")])
+        False -> html.text("")
+      }
+      let history_button = case correction_count > 0 {
+        False -> html.text("")
+        True ->
+          html.button(
+            [
+              class("text-button history-toggle"),
+              type_("button"),
+              attribute(
+                "aria-expanded",
+                case model.correction_history_id == Some(id) {
+                  True -> "true"
+                  False -> "false"
+                },
+              ),
+              event.on_click(ToggleCorrectionHistory(id)),
+            ],
+            [html.text("History (" <> int.to_string(correction_count) <> ")")],
+          )
+      }
+      html.article([class("cost-entry")], [
+        html.div([class("cost-entry-main")], [
+          html.div([class("cost-entry-meta")], [
+            html.span([class("cost-date")], [html.text(incurred_on)]),
+            html.span([class("category-chip")], [html.text(category)]),
+            correction_badge,
+          ]),
+          html.h3([], [html.text(description)]),
+        ]),
+        html.div([class("cost-entry-actions")], [
+          html.p([class("cost-entry-amount")], [
+            html.text(format_money(amount_cents)),
+          ]),
+          html.div([class("cost-entry-buttons")], [
+            html.button(
+              [
+                class("text-button"),
+                type_("button"),
+                disabled(model.correction_saving),
+                event.on_click(BeginCostCorrection(id)),
+              ],
+              [html.text("Correct")],
+            ),
+            history_button,
+          ]),
+        ]),
+        view_cost_correction_history(model, id),
+      ])
+    }
+  }
+}
+
+fn view_cost_correction_form(model: Model, id: String) -> Element(Message) {
+  let correction_error = case model.correction_form_error {
+    True ->
+      html.p([class("field-error form-error"), attribute("role", "alert")], [
+        html.text("Check the date, description, category, amount, and reason."),
+      ])
+    False -> html.text("")
+  }
+  let category_options =
+    list.map(model.construction_categories, fn(category) {
+      html.option([attribute("value", category)], category)
+    })
+  html.div([class("cost-correction-form")], [
+    html.div([class("correction-form-heading")], [
+      html.div([], [
+        html.p([class("eyebrow eyebrow-dark")], [html.text("CORRECT ENTRY")]),
+        html.h3([], [html.text("Update this construction cost")]),
       ]),
-      html.h3([], [html.text(description)]),
+      html.p([class("field-hint")], [
+        html.text(
+          "The previous values and your reason will remain in the history.",
+        ),
+      ]),
     ]),
-    html.p([class("cost-entry-amount")], [html.text(format_money(amount_cents))]),
+    html.div([class("correction-form-grid")], [
+      html.div([class("field")], [
+        html.label(
+          [class("field-label"), attribute("for", "correction-date-" <> id)],
+          [html.text("Date")],
+        ),
+        html.input([
+          class("text-input"),
+          attribute("id", "correction-date-" <> id),
+          type_("date"),
+          value(model.correction_date),
+          disabled(model.correction_saving),
+          event.on_input(ChangeCorrectionDate),
+        ]),
+      ]),
+      html.div([class("field")], [
+        html.label(
+          [
+            class("field-label"),
+            attribute("for", "correction-description-" <> id),
+          ],
+          [html.text("Description")],
+        ),
+        html.input([
+          class("text-input"),
+          attribute("id", "correction-description-" <> id),
+          type_("text"),
+          value(model.correction_description),
+          disabled(model.correction_saving),
+          event.on_input(ChangeCorrectionDescription),
+        ]),
+      ]),
+      html.div([class("field")], [
+        html.label(
+          [class("field-label"), attribute("for", "correction-category-" <> id)],
+          [html.text("Category")],
+        ),
+        html.select(
+          [
+            class("text-input"),
+            attribute("id", "correction-category-" <> id),
+            value(model.correction_category),
+            disabled(model.correction_saving),
+            event.on_change(ChangeCorrectionCategory),
+          ],
+          category_options,
+        ),
+      ]),
+      html.div([class("field")], [
+        html.label(
+          [class("field-label"), attribute("for", "correction-amount-" <> id)],
+          [html.text("Amount")],
+        ),
+        html.div([class("money-field")], [
+          html.input([
+            class("text-input"),
+            attribute("id", "correction-amount-" <> id),
+            type_("text"),
+            value(model.correction_amount),
+            placeholder("0.00"),
+            attribute("inputmode", "decimal"),
+            disabled(model.correction_saving),
+            event.on_input(ChangeCorrectionAmount),
+          ]),
+          html.span(
+            [class("currency-symbol"), attribute("aria-hidden", "true")],
+            [
+              html.text("€"),
+            ],
+          ),
+        ]),
+      ]),
+      html.div([class("field correction-reason-field")], [
+        html.label(
+          [class("field-label"), attribute("for", "correction-reason-" <> id)],
+          [html.text("Reason for correction")],
+        ),
+        html.input([
+          class("text-input"),
+          attribute("id", "correction-reason-" <> id),
+          type_("text"),
+          value(model.correction_reason),
+          placeholder("e.g. The invoice amount was entered incorrectly"),
+          disabled(model.correction_saving),
+          event.on_input(ChangeCorrectionReason),
+        ]),
+      ]),
+    ]),
+    correction_error,
+    html.div([class("form-actions")], [
+      html.button(
+        [
+          class("add-button"),
+          type_("button"),
+          disabled(model.correction_saving),
+          event.on_click(SaveCostCorrection),
+        ],
+        [
+          html.text(case model.correction_saving {
+            True -> "Saving correction..."
+            False -> "Save correction"
+          }),
+        ],
+      ),
+      html.button(
+        [
+          class("text-button"),
+          type_("button"),
+          disabled(model.correction_saving),
+          event.on_click(CancelCostCorrection),
+        ],
+        [html.text("Cancel")],
+      ),
+    ]),
+  ])
+}
+
+fn view_cost_correction_history(model: Model, id: String) -> Element(Message) {
+  case model.correction_history_id == Some(id) {
+    False -> html.text("")
+    True ->
+      case model.correction_history_loading {
+        True ->
+          html.p([class("correction-history-note")], [
+            html.text("Loading correction history..."),
+          ])
+        False ->
+          case model.correction_history_error {
+            True ->
+              html.p([class("field-error correction-history-note")], [
+                html.text("Correction history could not be loaded."),
+              ])
+            False ->
+              case model.cost_corrections {
+                [] ->
+                  html.p([class("correction-history-note")], [
+                    html.text("No previous versions are recorded."),
+                  ])
+                corrections ->
+                  html.div(
+                    [class("correction-history")],
+                    list.map(corrections, view_cost_correction),
+                  )
+              }
+          }
+      }
+  }
+}
+
+fn view_cost_correction(correction: CostCorrection) -> Element(Message) {
+  let CostCorrection(_, reason, corrected_at, previous_cost) = correction
+  let construction_costs.ActualCost(
+    incurred_on:,
+    description:,
+    category:,
+    amount_cents:,
+  ) = previous_cost
+  html.article([class("correction-history-entry")], [
+    html.div([], [
+      html.p([class("correction-history-date")], [
+        html.text("Previous version · " <> corrected_at),
+      ]),
+      html.p([class("correction-history-reason")], [html.text(reason)]),
+      html.p([class("correction-history-details")], [
+        html.text(incurred_on <> " · " <> category <> " · " <> description),
+      ]),
+    ]),
+    html.p([class("correction-history-amount")], [
+      html.text(format_money(amount_cents)),
+    ]),
   ])
 }
 

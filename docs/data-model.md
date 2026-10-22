@@ -1,6 +1,6 @@
 # Data model
 
-The schema includes executable migrations for construction history and a single local household budget. Accounts, users, and multiple household ownership are future design work. All monetary values are stored as integer cents; the current application uses euros and is limited to one household.
+The schema includes executable migrations for construction history, a single local household budget, and immutable monthly contribution snapshots. Accounts, users, and multiple household ownership are future design work. All monetary values are stored as integer cents; the current application uses euros and is limited to one household.
 
 ## Household budgeting
 
@@ -18,19 +18,27 @@ The current implementation stores one household budget as a singleton snapshot, 
 
 `expense_splits.amount_cents` must sum exactly to `expenses.amount_cents`. The domain function exposes the base share and the number of residents who pay one extra cent, avoiding rounding ambiguity.
 
-For contribution planning, `plan_contributions` applies the available account balance to expenses first, up to the expense total. Contributions are calculated from the remaining amount and never become negative; any surplus balance is returned separately. The browser automatically saves the household size, account balance, and detailed expense lines to the singleton `household_budget_state` and `household_budget_expenses` tables after a brief pause in typing. This is a current single-household snapshot, not an account or user system.
+For contribution planning, `plan_contributions` applies the available account balance to expenses first, up to the expense total. Contributions are calculated from the remaining amount and never become negative; any surplus balance is returned separately. The browser automatically saves the current household size, account balance, and detailed expense lines to the singleton `household_budget_state` and `household_budget_expenses` tables after a brief pause in typing. Separately, the user can explicitly save a reviewed month from the contribution-history panel. Migration `0004` stores one immutable snapshot per month, including the input expense lines and the shared-domain calculation results; later autosaves never rewrite it. This remains a single-household feature, not an account or user system.
+
+The implemented monthly snapshot tables are `household_contribution_history` and `household_contribution_history_expenses`. The month is unique, the archived household size and balances are retained, and contribution results preserve the exact-cent equal split. The API rejects duplicate months rather than overwriting a financial record.
+
+| Entity | Important fields | Notes |
+| --- | --- | --- |
+| `household_contribution_history` | `period`, household size, account balance, calculated totals and shares | One immutable, explicitly saved contribution calculation per month |
+| `household_contribution_history_expenses` | `period`, `position`, `label`, `amount_cents` | Expense details as entered when the monthly snapshot was saved |
 
 ## Construction cost history
 
-The browser screen records actual costs only. Each entry has a date, description, category, and non-negative integer-cent amount. Record an invoice or purchase once; do not create duplicate entries for its instalments. The client shows the total and subtotals by category. The PostgreSQL migration seeds a single initial `My Home` project and the three default categories; the Erlang API and storage adapter load and persist categories and actual costs, so construction history survives page reloads.
+The browser screen records actual costs only. Each entry has a date, description, category, and non-negative integer-cent amount. Record an invoice or purchase once; do not create duplicate entries for its instalments. The client shows the total and subtotals by category. Migration `0001` seeds one initial `My Home` project and the three default categories; the API and storage adapter persist costs. Corrections require a reason and save the previous values in `construction_cost_corrections`, so users can inspect the correction history without losing the current total.
 
 | Entity | Important fields | Notes |
 | --- | --- | --- |
 | `construction_projects` | `id`, `name`, `created_at` | Migration seeds one project; household ownership is deferred until households exist |
 | `construction_categories` | `id`, `project_id`, `name`, `sort_order`, `created_at` | User-defined categories, initially construction, interior, and exterior |
-| `construction_costs` | `id`, `project_id`, `category_id`, `amount_cents`, `incurred_on`, `description`, `created_at` | One confirmed invoice or purchase; amount stored in integer cents |
+| `construction_costs` | `id`, `project_id`, `category_id`, `amount_cents`, `incurred_on`, `description`, `created_at` | Current version of one confirmed invoice or purchase; amount stored in integer cents |
+| `construction_cost_corrections` | `id`, `construction_cost_id`, previous values, `reason`, `corrected_at` | Append-only snapshot of each version replaced by an explicit correction |
 
-The initial project is not yet scoped to a household because accounts and households are not implemented. The API currently runs only on loopback and has no authentication; add household ownership, enforce household-scoped queries, and add authentication and authorization before allowing any external access. Correction/reversal workflows and estimate or forecast screens are future work. Financial history must not be silently deleted when those workflows are implemented.
+The initial project is not yet scoped to a household because accounts and households are not implemented. The API currently runs only on loopback and has no authentication; add household ownership, enforce household-scoped queries, and add authentication and authorization before allowing any external access. Estimate or forecast screens are future work. Cost corrections preserve the previous values and require a reason; financial history must not be silently deleted.
 
 ## Integrity rules
 
