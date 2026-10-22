@@ -125,7 +125,7 @@ fn insert_actual_cost(
     pog.query(
       "INSERT INTO construction_costs AS persisted_cost "
       <> "(project_id, category_id, amount_cents, incurred_on, description) "
-      <> "SELECT $1::uuid, category.id, $3::bigint, $4::date, $5::text "
+      <> "SELECT $1::uuid, category.id, $3::bigint, ($4::text)::date, $5::text "
       <> "FROM construction_categories AS category "
       <> "WHERE category.project_id = $1::uuid "
       <> "AND lower(btrim(category.name)) = lower(btrim($2::text)) "

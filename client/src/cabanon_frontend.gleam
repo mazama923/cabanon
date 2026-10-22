@@ -1,14 +1,22 @@
 import cabanon/domain/construction/costs as construction_costs
 import cabanon/domain/household/budget as household_budget
 import cabanon/domain/household/money as household_money
+import gleam/dynamic/decode
 import gleam/int
+import gleam/javascript/promise
+import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre
-import lustre/attribute.{attribute, class, min, placeholder, step, type_, value}
+import lustre/attribute.{
+  attribute, class, disabled, min, placeholder, step, type_, value,
+}
+import lustre/effect.{type Effect}
 import lustre/element.{type Element}
 import lustre/element/html
 import lustre/event
+import rsvp
 
 type Section {
   HouseholdSection
@@ -31,11 +39,30 @@ type Model {
     cost_form_error: Bool,
     category_form_open: Bool,
     new_category: String,
+    construction_loading: Bool,
+    cost_saving: Bool,
+    category_saving: Bool,
+    api_error: String,
+    household_ready: Bool,
+    household_status: HouseholdStatus,
+    household_revision: Int,
+    household_request_revision: Option(Int),
+    household_save_due: Bool,
   )
 }
 
 type ExpenseLine {
   ExpenseLine(id: Int, label: String, amount: String)
+}
+
+type HouseholdStatus {
+  LoadingBudget
+  BudgetUnavailable
+  BudgetSaved
+  BudgetWaiting
+  BudgetSaving
+  BudgetInvalid
+  BudgetSaveFailed
 }
 
 type Message {
@@ -56,6 +83,33 @@ type Message {
   ChangeNewCategory(String)
   SaveCategory
   CancelCategoryForm
+  ConstructionLoaded(Result(ConstructionData, rsvp.Error(String)))
+  ConstructionCostSaved(
+    Result(construction_costs.ActualCost, rsvp.Error(String)),
+  )
+  CategorySaved(Result(String, rsvp.Error(String)))
+  HouseholdLoaded(Result(HouseholdData, rsvp.Error(String)))
+  HouseholdSaveReady(Int)
+  HouseholdSaved(Int, Result(HouseholdData, rsvp.Error(String)))
+}
+
+type ConstructionData {
+  ConstructionData(
+    categories: List(String),
+    costs: List(construction_costs.ActualCost),
+  )
+}
+
+type HouseholdData {
+  HouseholdData(
+    people_count: Int,
+    account_balance_cents: Int,
+    expenses: List(StoredExpense),
+  )
+}
+
+type StoredExpense {
+  StoredExpense(label: String, amount_cents: Int)
 }
 
 type CalculationProblem {
@@ -64,123 +118,590 @@ type CalculationProblem {
   InvalidBalance
 }
 
+const construction_api_url = "http://localhost:8080/api/construction"
+
+const household_api_url = "http://localhost:8080/api/household"
+
 pub fn main() {
-  let app = lustre.simple(init, update, view)
+  let app = lustre.application(init, update, view)
   let assert Ok(_) = lustre.start(app, "#app", Nil)
   Nil
 }
 
-fn init(_flags: Nil) -> Model {
-  Model(
-    section: HouseholdSection,
-    people: "",
-    balance: "",
-    expenses: [ExpenseLine(id: 1, label: "", amount: "")],
-    next_id: 2,
-    construction_costs: [],
-    construction_categories: ["Construction", "Interior", "Exterior"],
-    selected_category: "Construction",
-    cost_date: "",
-    cost_description: "",
-    cost_amount: "",
-    cost_form_error: False,
-    category_form_open: False,
-    new_category: "",
-  )
+fn init(_flags: Nil) -> #(Model, Effect(Message)) {
+  let model =
+    Model(
+      section: HouseholdSection,
+      people: "",
+      balance: "",
+      expenses: [ExpenseLine(id: 1, label: "", amount: "")],
+      next_id: 2,
+      construction_costs: [],
+      construction_categories: [],
+      selected_category: "",
+      cost_date: "",
+      cost_description: "",
+      cost_amount: "",
+      cost_form_error: False,
+      category_form_open: False,
+      new_category: "",
+      construction_loading: True,
+      cost_saving: False,
+      category_saving: False,
+      api_error: "",
+      household_ready: False,
+      household_status: LoadingBudget,
+      household_revision: 0,
+      household_request_revision: None,
+      household_save_due: False,
+    )
+  let load_construction =
+    rsvp.get(
+      construction_api_url,
+      rsvp.expect_json(construction_data_decoder(), fn(result) {
+        ConstructionLoaded(result)
+      }),
+    )
+  let load_household =
+    rsvp.get(
+      household_api_url,
+      rsvp.expect_json(household_data_decoder(), fn(result) {
+        HouseholdLoaded(result)
+      }),
+    )
+  #(model, effect.batch([load_construction, load_household]))
 }
 
-fn update(model: Model, message: Message) -> Model {
+fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
   case message {
-    ShowHousehold -> Model(..model, section: HouseholdSection)
-    ShowConstruction -> Model(..model, section: ConstructionSection)
+    ShowHousehold -> no_effect(Model(..model, section: HouseholdSection))
+    ShowConstruction -> no_effect(Model(..model, section: ConstructionSection))
     AddExpense ->
-      Model(
-        ..model,
-        expenses: list.append(model.expenses, [
-          ExpenseLine(id: model.next_id, label: "", amount: ""),
-        ]),
-        next_id: model.next_id + 1,
+      household_changed(
+        Model(
+          ..model,
+          expenses: list.append(model.expenses, [
+            ExpenseLine(id: model.next_id, label: "", amount: ""),
+          ]),
+          next_id: model.next_id + 1,
+        ),
       )
     RemoveExpense(id) ->
-      Model(
-        ..model,
-        expenses: list.filter(model.expenses, fn(expense) { expense.id != id }),
+      household_changed(
+        Model(
+          ..model,
+          expenses: list.filter(model.expenses, fn(expense) { expense.id != id }),
+        ),
       )
-    ChangePeople(people) -> Model(..model, people: people)
-    ChangeBalance(balance) -> Model(..model, balance: balance)
+    ChangePeople(people) -> household_changed(Model(..model, people: people))
+    ChangeBalance(balance) ->
+      household_changed(Model(..model, balance: balance))
     ChangeLabel(id, label) ->
-      Model(
-        ..model,
-        expenses: update_expense(model.expenses, id, fn(expense) {
-          ExpenseLine(..expense, label: label)
-        }),
+      household_changed(
+        Model(
+          ..model,
+          expenses: update_expense(model.expenses, id, fn(expense) {
+            ExpenseLine(..expense, label: label)
+          }),
+        ),
       )
     ChangeAmount(id, amount) ->
-      Model(
-        ..model,
-        expenses: update_expense(model.expenses, id, fn(expense) {
-          ExpenseLine(..expense, amount: amount)
-        }),
+      household_changed(
+        Model(
+          ..model,
+          expenses: update_expense(model.expenses, id, fn(expense) {
+            ExpenseLine(..expense, amount: amount)
+          }),
+        ),
       )
     ChangeCostDate(date) ->
-      Model(..model, cost_date: date, cost_form_error: False)
+      no_effect(Model(..model, cost_date: date, cost_form_error: False))
     ChangeCostDescription(description) ->
-      Model(..model, cost_description: description, cost_form_error: False)
+      no_effect(
+        Model(..model, cost_description: description, cost_form_error: False),
+      )
     ChangeCostCategory(category) ->
-      Model(..model, selected_category: category, cost_form_error: False)
+      no_effect(
+        Model(..model, selected_category: category, cost_form_error: False),
+      )
     ChangeCostAmount(amount) ->
-      Model(..model, cost_amount: amount, cost_form_error: False)
+      no_effect(Model(..model, cost_amount: amount, cost_form_error: False))
     AddActualCost -> add_actual_cost(model)
-    ShowCategoryForm -> Model(..model, category_form_open: True)
-    ChangeNewCategory(category) -> Model(..model, new_category: category)
+    ShowCategoryForm -> no_effect(Model(..model, category_form_open: True))
+    ChangeNewCategory(category) ->
+      no_effect(Model(..model, new_category: category))
     SaveCategory -> save_category(model)
     CancelCategoryForm ->
-      Model(..model, category_form_open: False, new_category: "")
+      no_effect(Model(..model, category_form_open: False, new_category: ""))
+    ConstructionLoaded(Ok(data)) -> {
+      let ConstructionData(categories:, costs:) = data
+      let selected_category = case
+        category_exists(categories, model.selected_category)
+      {
+        True -> model.selected_category
+        False -> first_category(categories)
+      }
+      no_effect(
+        Model(
+          ..model,
+          construction_categories: categories,
+          construction_costs: costs,
+          selected_category:,
+          construction_loading: False,
+          api_error: "",
+        ),
+      )
+    }
+    ConstructionLoaded(Error(_)) ->
+      no_effect(
+        Model(
+          ..model,
+          construction_loading: False,
+          api_error: "Construction data could not be loaded. Check that the server and PostgreSQL are running, then reload.",
+        ),
+      )
+    ConstructionCostSaved(Ok(cost)) ->
+      no_effect(
+        Model(
+          ..model,
+          construction_costs: list.append(model.construction_costs, [cost]),
+          cost_description: "",
+          cost_amount: "",
+          cost_form_error: False,
+          cost_saving: False,
+          api_error: "",
+        ),
+      )
+    ConstructionCostSaved(Error(_)) ->
+      no_effect(
+        Model(
+          ..model,
+          cost_saving: False,
+          api_error: "The cost could not be saved. Your entries are still here; check the server and database, then try again.",
+        ),
+      )
+    CategorySaved(Ok(category)) ->
+      no_effect(
+        Model(
+          ..model,
+          construction_categories: list.append(model.construction_categories, [
+            category,
+          ]),
+          selected_category: category,
+          category_form_open: False,
+          new_category: "",
+          category_saving: False,
+          api_error: "",
+        ),
+      )
+    CategorySaved(Error(_)) ->
+      no_effect(
+        Model(
+          ..model,
+          category_saving: False,
+          api_error: "The category could not be saved. Your entry is still here; check the server and database, then try again.",
+        ),
+      )
+    HouseholdLoaded(Ok(data)) -> {
+      let HouseholdData(people_count, account_balance_cents, stored_expenses) =
+        data
+      let expenses = stored_expenses_to_lines(stored_expenses, 1)
+      no_effect(
+        Model(
+          ..model,
+          people: display_people_count(people_count),
+          balance: display_amount_input(account_balance_cents),
+          expenses:,
+          next_id: list.length(expenses) + 1,
+          household_ready: True,
+          household_status: BudgetSaved,
+          household_revision: 0,
+          household_request_revision: None,
+          household_save_due: False,
+        ),
+      )
+    }
+    HouseholdLoaded(Error(_)) ->
+      no_effect(
+        Model(
+          ..model,
+          household_status: BudgetUnavailable,
+          household_ready: False,
+        ),
+      )
+    HouseholdSaveReady(revision) -> household_save_ready(model, revision)
+    HouseholdSaved(revision, result) ->
+      household_save_completed(model, revision, result)
   }
 }
 
-fn add_actual_cost(model: Model) -> Model {
-  case cost_amount_cents(model.cost_amount) {
-    Error(Nil) -> Model(..model, cost_form_error: True)
-    Ok(amount_cents) -> {
-      let cost =
-        construction_costs.ActualCost(
-          incurred_on: string.trim(model.cost_date),
-          description: string.trim(model.cost_description),
-          category: string.trim(model.selected_category),
-          amount_cents: amount_cents,
+fn no_effect(model: Model) -> #(Model, Effect(Message)) {
+  #(model, effect.none())
+}
+
+fn household_changed(model: Model) -> #(Model, Effect(Message)) {
+  case model.household_ready {
+    False -> no_effect(model)
+    True -> {
+      let revision = model.household_revision + 1
+      let model =
+        Model(
+          ..model,
+          household_revision: revision,
+          household_status: BudgetWaiting,
         )
-      case construction_costs.summarise_actual_costs([cost]) {
-        Error(_) -> Model(..model, cost_form_error: True)
-        Ok(_) ->
-          Model(
-            ..model,
-            construction_costs: list.append(model.construction_costs, [cost]),
-            cost_description: "",
-            cost_amount: "",
-            cost_form_error: False,
+      let timer =
+        effect.from(fn(dispatch) {
+          let _ =
+            promise.wait(450)
+            |> promise.tap(fn(_) { dispatch(HouseholdSaveReady(revision)) })
+          Nil
+        })
+      #(model, timer)
+    }
+  }
+}
+
+fn household_save_ready(
+  model: Model,
+  revision: Int,
+) -> #(Model, Effect(Message)) {
+  case revision == model.household_revision {
+    False -> no_effect(model)
+    True ->
+      case household_data(model) {
+        Error(Nil) ->
+          no_effect(
+            Model(
+              ..model,
+              household_status: BudgetInvalid,
+              household_save_due: False,
+            ),
           )
+        Ok(_) ->
+          case model.household_request_revision {
+            Some(_) ->
+              no_effect(
+                Model(
+                  ..model,
+                  household_status: BudgetWaiting,
+                  household_save_due: True,
+                ),
+              )
+            None -> begin_household_save(model, revision)
+          }
+      }
+  }
+}
+
+fn begin_household_save(
+  model: Model,
+  revision: Int,
+) -> #(Model, Effect(Message)) {
+  case household_data(model) {
+    Error(Nil) ->
+      no_effect(
+        Model(
+          ..model,
+          household_status: BudgetInvalid,
+          household_save_due: False,
+        ),
+      )
+    Ok(data) -> {
+      let save =
+        rsvp.put(
+          household_api_url,
+          household_data_to_json(data),
+          rsvp.expect_json(household_data_decoder(), fn(result) {
+            HouseholdSaved(revision, result)
+          }),
+        )
+      let model =
+        Model(
+          ..model,
+          household_status: BudgetSaving,
+          household_request_revision: Some(revision),
+          household_save_due: False,
+        )
+      #(model, save)
+    }
+  }
+}
+
+fn household_save_completed(
+  model: Model,
+  revision: Int,
+  result: Result(HouseholdData, rsvp.Error(String)),
+) -> #(Model, Effect(Message)) {
+  case model.household_request_revision == Some(revision) {
+    False -> no_effect(model)
+    True -> {
+      let model = Model(..model, household_request_revision: None)
+      case result {
+        Ok(_) ->
+          case model.household_revision == revision {
+            True ->
+              no_effect(
+                Model(
+                  ..model,
+                  household_status: BudgetSaved,
+                  household_save_due: False,
+                ),
+              )
+            False ->
+              case model.household_save_due {
+                True ->
+                  begin_household_save(
+                    Model(..model, household_save_due: False),
+                    model.household_revision,
+                  )
+                False -> no_effect(model)
+              }
+          }
+        Error(_) ->
+          case model.household_revision == revision {
+            True ->
+              no_effect(
+                Model(
+                  ..model,
+                  household_status: BudgetSaveFailed,
+                  household_save_due: False,
+                ),
+              )
+            False ->
+              case model.household_save_due {
+                True ->
+                  begin_household_save(
+                    Model(..model, household_save_due: False),
+                    model.household_revision,
+                  )
+                False -> no_effect(model)
+              }
+          }
       }
     }
   }
 }
 
-fn save_category(model: Model) -> Model {
+fn household_data(model: Model) -> Result(HouseholdData, Nil) {
+  let people_count = case string.trim(model.people) {
+    "" -> Ok(0)
+    input ->
+      case int.parse(input) {
+        Ok(count) if count >= 0 -> Ok(count)
+        _ -> Error(Nil)
+      }
+  }
+  case people_count {
+    Error(Nil) -> Error(Nil)
+    Ok(people_count) ->
+      case amount_cents(model.balance) {
+        Error(Nil) -> Error(Nil)
+        Ok(account_balance_cents) ->
+          case stored_expenses_from_lines(model.expenses) {
+            Error(Nil) -> Error(Nil)
+            Ok(expenses) ->
+              Ok(HouseholdData(people_count:, account_balance_cents:, expenses:))
+          }
+      }
+  }
+}
+
+fn stored_expenses_from_lines(
+  lines: List(ExpenseLine),
+) -> Result(List(StoredExpense), Nil) {
+  case lines {
+    [] -> Ok([])
+    [ExpenseLine(_, label, amount), ..rest] ->
+      case amount_cents(amount) {
+        Error(Nil) -> Error(Nil)
+        Ok(amount_cents) ->
+          case stored_expenses_from_lines(rest) {
+            Error(Nil) -> Error(Nil)
+            Ok(stored_rest) ->
+              Ok([StoredExpense(label, amount_cents), ..stored_rest])
+          }
+      }
+  }
+}
+
+fn household_data_decoder() -> decode.Decoder(HouseholdData) {
+  use people_count <- decode.field("people_count", decode.int)
+  use account_balance_cents <- decode.field("account_balance_cents", decode.int)
+  use expenses <- decode.field(
+    "expenses",
+    decode.list(stored_expense_decoder()),
+  )
+  decode.success(HouseholdData(people_count:, account_balance_cents:, expenses:))
+}
+
+fn stored_expense_decoder() -> decode.Decoder(StoredExpense) {
+  use label <- decode.field("label", decode.string)
+  use amount_cents <- decode.field("amount_cents", decode.int)
+  decode.success(StoredExpense(label:, amount_cents:))
+}
+
+fn household_data_to_json(data: HouseholdData) -> json.Json {
+  let HouseholdData(people_count, account_balance_cents, expenses) = data
+  let expenses =
+    list.map(expenses, fn(expense) {
+      let StoredExpense(label:, amount_cents:) = expense
+      json.object([
+        #("label", json.string(label)),
+        #("amount_cents", json.int(amount_cents)),
+      ])
+    })
+  json.object([
+    #("people_count", json.int(people_count)),
+    #("account_balance_cents", json.int(account_balance_cents)),
+    #("expenses", json.array(from: expenses, of: fn(value) { value })),
+  ])
+}
+
+fn stored_expenses_to_lines(
+  expenses: List(StoredExpense),
+  next_id: Int,
+) -> List(ExpenseLine) {
+  case expenses {
+    [] -> []
+    [StoredExpense(label, amount_cents), ..rest] -> [
+      ExpenseLine(next_id, label, display_amount_input(amount_cents)),
+      ..stored_expenses_to_lines(rest, next_id + 1)
+    ]
+  }
+}
+
+fn display_people_count(people_count: Int) -> String {
+  case people_count {
+    0 -> ""
+    count -> int.to_string(count)
+  }
+}
+
+fn display_amount_input(amount_cents: Int) -> String {
+  case amount_cents {
+    0 -> ""
+    _ -> {
+      let fractional = case amount_cents % 100 < 10 {
+        True -> "0" <> int.to_string(amount_cents % 100)
+        False -> int.to_string(amount_cents % 100)
+      }
+      int.to_string(amount_cents / 100) <> "." <> fractional
+    }
+  }
+}
+
+fn household_status_note(status: HouseholdStatus) -> String {
+  case status {
+    LoadingBudget -> "Loading saved household budget..."
+    BudgetUnavailable ->
+      "Saved data could not be loaded. Check the server and database, then reload."
+    BudgetSaved -> "All household changes are saved."
+    BudgetWaiting -> "Saving changes automatically..."
+    BudgetSaving -> "Saving changes..."
+    BudgetInvalid -> "Fix invalid amounts to save your changes."
+    BudgetSaveFailed ->
+      "Could not save changes. They remain on screen; check the server and try again."
+  }
+}
+
+fn add_actual_cost(model: Model) -> #(Model, Effect(Message)) {
+  case model.cost_saving || model.construction_loading {
+    True -> no_effect(model)
+    False ->
+      case cost_amount_cents(model.cost_amount) {
+        Error(Nil) -> no_effect(Model(..model, cost_form_error: True))
+        Ok(amount_cents) -> {
+          let cost =
+            construction_costs.ActualCost(
+              incurred_on: string.trim(model.cost_date),
+              description: string.trim(model.cost_description),
+              category: string.trim(model.selected_category),
+              amount_cents: amount_cents,
+            )
+          case construction_costs.summarise_actual_costs([cost]) {
+            Error(_) -> no_effect(Model(..model, cost_form_error: True))
+            Ok(_) -> {
+              let construction_costs.ActualCost(
+                incurred_on:,
+                description:,
+                category:,
+                amount_cents:,
+              ) = cost
+              let body =
+                json.object([
+                  #("incurred_on", json.string(incurred_on)),
+                  #("description", json.string(description)),
+                  #("category", json.string(category)),
+                  #("amount_cents", json.int(amount_cents)),
+                ])
+              let save_cost =
+                rsvp.post(
+                  construction_api_url <> "/costs",
+                  body,
+                  rsvp.expect_json(actual_cost_decoder(), fn(result) {
+                    ConstructionCostSaved(result)
+                  }),
+                )
+              #(Model(..model, cost_saving: True, api_error: ""), save_cost)
+            }
+          }
+        }
+      }
+  }
+}
+
+fn save_category(model: Model) -> #(Model, Effect(Message)) {
   let category = string.trim(model.new_category)
   case
-    category == "" || category_exists(model.construction_categories, category)
+    model.category_saving
+    || model.construction_loading
+    || category == ""
+    || category_exists(model.construction_categories, category)
   {
-    True -> model
-    False ->
-      Model(
-        ..model,
-        construction_categories: list.append(model.construction_categories, [
-          category,
-        ]),
-        selected_category: category,
-        category_form_open: False,
-        new_category: "",
-      )
+    True -> no_effect(model)
+    False -> {
+      let save_category =
+        rsvp.post(
+          construction_api_url <> "/categories",
+          json.object([#("name", json.string(category))]),
+          rsvp.expect_json(category_decoder(), fn(result) {
+            CategorySaved(result)
+          }),
+        )
+      #(Model(..model, category_saving: True, api_error: ""), save_category)
+    }
+  }
+}
+
+fn construction_data_decoder() -> decode.Decoder(ConstructionData) {
+  use categories <- decode.field("categories", decode.list(decode.string))
+  use costs <- decode.field("costs", decode.list(actual_cost_decoder()))
+  decode.success(ConstructionData(categories:, costs:))
+}
+
+fn actual_cost_decoder() -> decode.Decoder(construction_costs.ActualCost) {
+  use incurred_on <- decode.field("incurred_on", decode.string)
+  use description <- decode.field("description", decode.string)
+  use category <- decode.field("category", decode.string)
+  use amount_cents <- decode.field("amount_cents", decode.int)
+  decode.success(construction_costs.ActualCost(
+    incurred_on:,
+    description:,
+    category:,
+    amount_cents:,
+  ))
+}
+
+fn category_decoder() -> decode.Decoder(String) {
+  use name <- decode.field("name", decode.string)
+  decode.success(name)
+}
+
+fn first_category(categories: List(String)) -> String {
+  case categories {
+    [] -> ""
+    [category, ..] -> category
   }
 }
 
@@ -253,6 +774,12 @@ fn view_household(model: Model) -> Element(Message) {
     True -> "summary-note summary-note-error"
     False -> "summary-note"
   }
+  let household_controls_disabled = model.household_ready == False
+  let household_note_class = case model.household_status {
+    BudgetUnavailable | BudgetInvalid | BudgetSaveFailed ->
+      "privacy-note summary-note-error"
+    _ -> "privacy-note"
+  }
   let expense_rows = case model.expenses {
     [] -> [
       html.div([class("empty-state")], [
@@ -263,7 +790,10 @@ fn view_household(model: Model) -> Element(Message) {
         html.p([], [html.text("Add an expense to start the calculation.")]),
       ]),
     ]
-    expenses -> list.map(expenses, view_expense)
+    expenses ->
+      list.map(expenses, fn(expense) {
+        view_expense(expense, household_controls_disabled)
+      })
   }
 
   html.main([class("page-shell")], [
@@ -313,6 +843,7 @@ fn view_household(model: Model) -> Element(Message) {
             attribute("inputmode", "decimal"),
             attribute("aria-invalid", balance_aria_invalid),
             attribute("aria-describedby", "account-balance-note"),
+            disabled(household_controls_disabled),
             event.on_input(ChangeBalance),
           ]),
           html.span(
@@ -349,6 +880,7 @@ fn view_household(model: Model) -> Element(Message) {
           value(model.people),
           placeholder("2"),
           attribute("inputmode", "numeric"),
+          disabled(household_controls_disabled),
           event.on_input(ChangePeople),
         ]),
         html.p([class("summary-note")], [html.text("Equal split for everyone")]),
@@ -380,7 +912,12 @@ fn view_household(model: Model) -> Element(Message) {
       html.div([class("expense-list")], expense_rows),
       html.div([class("expense-actions")], [
         html.button(
-          [class("add-button"), type_("button"), event.on_click(AddExpense)],
+          [
+            class("add-button"),
+            type_("button"),
+            disabled(household_controls_disabled),
+            event.on_click(AddExpense),
+          ],
           [
             html.span([class("add-icon"), attribute("aria-hidden", "true")], [
               html.text("+"),
@@ -388,8 +925,8 @@ fn view_household(model: Model) -> Element(Message) {
             html.text("Add an expense"),
           ],
         ),
-        html.p([class("privacy-note")], [
-          html.text("Changes are not saved yet."),
+        html.p([class(household_note_class), attribute("aria-live", "polite")], [
+          html.text(household_status_note(model.household_status)),
         ]),
       ]),
     ]),
@@ -457,7 +994,10 @@ fn view_construction(model: Model) -> Element(Message) {
       case categories {
         [] -> [
           html.p([class("summary-note")], [
-            html.text("Category totals will appear after your first entry."),
+            html.text(case model.construction_loading {
+              True -> "Loading category totals..."
+              False -> "Category totals will appear after your first entry."
+            }),
           ]),
         ]
         categories -> list.map(categories, view_category_total)
@@ -469,19 +1009,27 @@ fn view_construction(model: Model) -> Element(Message) {
       string.compare(right.incurred_on, left.incurred_on)
     })
   let cost_rows = case sorted_costs {
-    [] -> [
-      html.div([class("empty-state")], [
-        html.div([class("empty-icon"), attribute("aria-hidden", "true")], [
-          html.text("+"),
-        ]),
-        html.h3([], [html.text("No construction costs yet")]),
-        html.p([], [
-          html.text(
-            "Add your first invoice or purchase to start building the real cost history.",
-          ),
-        ]),
-      ]),
-    ]
+    [] ->
+      case model.construction_loading {
+        True -> [
+          html.div([class("empty-state")], [
+            html.h3([], [html.text("Loading your construction history...")]),
+          ]),
+        ]
+        False -> [
+          html.div([class("empty-state")], [
+            html.div([class("empty-icon"), attribute("aria-hidden", "true")], [
+              html.text("+"),
+            ]),
+            html.h3([], [html.text("No construction costs yet")]),
+            html.p([], [
+              html.text(
+                "Add your first invoice or purchase to start building the real cost history.",
+              ),
+            ]),
+          ]),
+        ]
+      }
     costs -> list.map(costs, view_actual_cost)
   }
   let description_class = case
@@ -522,6 +1070,13 @@ fn view_construction(model: Model) -> Element(Message) {
     True -> view_category_form(model)
     False -> html.text("")
   }
+  let api_feedback = case model.api_error {
+    "" -> html.text("")
+    message ->
+      html.p([class("field-error form-error"), attribute("role", "alert")], [
+        html.text(message),
+      ])
+  }
   let entry_count = int.to_string(list.length(model.construction_costs))
   let entry_label = case list.length(model.construction_costs) {
     1 -> "recorded cost"
@@ -551,6 +1106,7 @@ fn view_construction(model: Model) -> Element(Message) {
         ),
       ]),
     ]),
+    api_feedback,
     html.section([class("construction-overview")], [
       html.div([class("summary-card construction-total")], [
         html.p([class("summary-label")], [html.text("TOTAL REAL COST")]),
@@ -631,6 +1187,10 @@ fn view_construction(model: Model) -> Element(Message) {
               class("text-input"),
               attribute("id", "cost-category"),
               value(model.selected_category),
+              disabled(
+                model.construction_loading
+                || model.construction_categories == [],
+              ),
               event.on_change(ChangeCostCategory),
             ],
             list.map(model.construction_categories, fn(category) {
@@ -679,19 +1239,28 @@ fn view_construction(model: Model) -> Element(Message) {
             [
               class("add-button"),
               type_("button"),
+              disabled(
+                model.cost_saving
+                || model.construction_loading
+                || model.construction_categories == [],
+              ),
               event.on_click(AddActualCost),
             ],
             [
               html.span([class("add-icon"), attribute("aria-hidden", "true")], [
                 html.text("+"),
               ]),
-              html.text("Add to history"),
+              html.text(case model.cost_saving {
+                True -> "Saving..."
+                False -> "Add to history"
+              }),
             ],
           ),
           html.button(
             [
               class("text-button"),
               type_("button"),
+              disabled(model.construction_loading),
               event.on_click(ShowCategoryForm),
             ],
             [html.text("Manage categories")],
@@ -699,7 +1268,7 @@ fn view_construction(model: Model) -> Element(Message) {
         ]),
         html.p([class("privacy-note")], [
           html.text(
-            "Stored only in this page for now; reloading clears the history.",
+            "Construction costs and categories are saved to PostgreSQL.",
           ),
         ]),
       ]),
@@ -778,14 +1347,25 @@ fn view_category_form(model: Model) -> Element(Message) {
         type_("text"),
         value(model.new_category),
         placeholder("e.g. Landscaping"),
+        disabled(model.category_saving),
         event.on_input(ChangeNewCategory),
       ]),
       html.p([class(feedback_class)], [html.text(feedback)]),
     ]),
     html.div([class("form-actions")], [
       html.button(
-        [class("add-button"), type_("button"), event.on_click(SaveCategory)],
-        [html.text("Save category")],
+        [
+          class("add-button"),
+          type_("button"),
+          disabled(model.category_saving || model.construction_loading),
+          event.on_click(SaveCategory),
+        ],
+        [
+          html.text(case model.category_saving {
+            True -> "Saving..."
+            False -> "Save category"
+          }),
+        ],
       ),
       html.button(
         [
@@ -799,7 +1379,10 @@ fn view_category_form(model: Model) -> Element(Message) {
   ])
 }
 
-fn view_expense(expense: ExpenseLine) -> Element(Message) {
+fn view_expense(
+  expense: ExpenseLine,
+  controls_disabled: Bool,
+) -> Element(Message) {
   let id = int.to_string(expense.id)
   let label_id = "expense-label-" <> id
   let amount_id = "expense-amount-" <> id
@@ -835,6 +1418,7 @@ fn view_expense(expense: ExpenseLine) -> Element(Message) {
         type_("text"),
         value(expense.label),
         placeholder("e.g. Rent"),
+        disabled(controls_disabled),
         event.on_input(fn(label) { ChangeLabel(expense.id, label) }),
       ]),
     ]),
@@ -851,6 +1435,7 @@ fn view_expense(expense: ExpenseLine) -> Element(Message) {
           placeholder("0.00"),
           attribute("inputmode", "decimal"),
           attribute("aria-describedby", amount_id <> "-help"),
+          disabled(controls_disabled),
           event.on_input(fn(amount) { ChangeAmount(expense.id, amount) }),
         ]),
         html.span([class("currency-symbol"), attribute("aria-hidden", "true")], [
@@ -866,6 +1451,7 @@ fn view_expense(expense: ExpenseLine) -> Element(Message) {
         class("remove-button"),
         type_("button"),
         attribute("aria-label", remove_label),
+        disabled(controls_disabled),
         event.on_click(RemoveExpense(expense.id)),
       ],
       [html.text("Remove")],

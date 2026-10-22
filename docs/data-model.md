@@ -1,10 +1,12 @@
 # Data model
 
-This is the intended relational model. The construction-cost tables have an initial executable migration; the household tables remain a design contract. All monetary values are integer cents with an ISO 4217 currency code. The initial release should support one currency per household.
+The schema includes executable migrations for construction history and a single local household budget. Accounts, users, and multiple household ownership are future design work. All monetary values are stored as integer cents; the current application uses euros and is limited to one household.
 
 ## Household budgeting
 
-| Entity | Important fields | Notes |
+The current implementation stores one household budget as a singleton snapshot, documented below. The following entities describe a future multi-user model and are not implemented yet.
+
+| Future entity | Important fields | Notes |
 | --- | --- | --- |
 | `households` | `id`, `name`, `currency`, `created_at` | Tenant boundary for every financial record |
 | `users` | `id`, `email`, `password_hash`, `created_at` | One authenticated identity per person |
@@ -16,11 +18,11 @@ This is the intended relational model. The construction-cost tables have an init
 
 `expense_splits.amount_cents` must sum exactly to `expenses.amount_cents`. The domain function exposes the base share and the number of residents who pay one extra cent, avoiding rounding ambiguity.
 
-For contribution planning, `plan_contributions` applies the available account balance to expenses first, up to the expense total. Contributions are calculated from the remaining amount and never become negative; any surplus balance is returned separately. The current browser client takes this balance as an in-memory input. Whether it should later be derived from persisted account activity belongs to the persistence design.
+For contribution planning, `plan_contributions` applies the available account balance to expenses first, up to the expense total. Contributions are calculated from the remaining amount and never become negative; any surplus balance is returned separately. The browser automatically saves the household size, account balance, and detailed expense lines to the singleton `household_budget_state` and `household_budget_expenses` tables after a brief pause in typing. This is a current single-household snapshot, not an account or user system.
 
 ## Construction cost history
 
-The browser screen records actual costs only. Each entry has a date, description, category, and non-negative integer-cent amount. Record an invoice or purchase once; do not create duplicate entries for its instalments. The client shows the total and subtotals by category. The PostgreSQL migration seeds a single initial `My Home` project and the three default categories; the storage adapter can list and add categories and actual costs. The browser and HTTP server are not connected to this adapter yet, so browser entries still reset on reload.
+The browser screen records actual costs only. Each entry has a date, description, category, and non-negative integer-cent amount. Record an invoice or purchase once; do not create duplicate entries for its instalments. The client shows the total and subtotals by category. The PostgreSQL migration seeds a single initial `My Home` project and the three default categories; the Erlang API and storage adapter load and persist categories and actual costs, so construction history survives page reloads.
 
 | Entity | Important fields | Notes |
 | --- | --- | --- |
@@ -28,7 +30,7 @@ The browser screen records actual costs only. Each entry has a date, description
 | `construction_categories` | `id`, `project_id`, `name`, `sort_order`, `created_at` | User-defined categories, initially construction, interior, and exterior |
 | `construction_costs` | `id`, `project_id`, `category_id`, `amount_cents`, `incurred_on`, `description`, `created_at` | One confirmed invoice or purchase; amount stored in integer cents |
 
-The initial project is not yet scoped to a household because accounts and households are not implemented. Add household ownership and enforce household-scoped queries before supporting multiple households or exposing the API. Correction/reversal workflows and estimate or forecast screens are future work. Financial history must not be silently deleted when those workflows are implemented.
+The initial project is not yet scoped to a household because accounts and households are not implemented. The API currently runs only on loopback and has no authentication; add household ownership, enforce household-scoped queries, and add authentication and authorization before allowing any external access. Correction/reversal workflows and estimate or forecast screens are future work. Financial history must not be silently deleted when those workflows are implemented.
 
 ## Integrity rules
 
