@@ -29,7 +29,7 @@ run = "gleam run"
 
 [tasks."frontend:run"]
 description = "Run the Lustre frontend development server"
-run = "cd client && gleam run -m lustre/dev start"
+run = "cd client && gleam run -m lustre/dev start cabanon_frontend"
 
 [tasks.dev]
 description = "Run the Erlang backend and Lustre frontend together"
@@ -37,7 +37,11 @@ depends = ["run", "frontend:run"]
 
 [tasks."frontend:check"]
 description = "Type-check and build the Lustre frontend"
-run = "cd client && gleam check && gleam run -m lustre/dev build --outdir=build/ci-preview"
+run = "cd client && gleam check && gleam run -m lustre/dev build cabanon_frontend --outdir=build/ci-preview"
+
+[tasks."frontend:demo"]
+description = "Build the static GitHub Pages demo with synthetic in-memory data"
+run = "./scripts/build-demo.sh"
 
 [tasks.package]
 description = "Build the Erlang deployment archive and checksum"

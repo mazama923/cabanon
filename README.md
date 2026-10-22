@@ -30,6 +30,10 @@ curl http://127.0.0.1:8080/healthz
 
 For the browser calculator, run `mise run frontend:run` in another terminal and open `http://localhost:1234`. Its in-memory data resets when the page reloads.
 
+## Public demo
+
+The static demo is published at [https://mazama923.github.io/cabanon/](https://mazama923.github.io/cabanon/) after successful verification on `main`. It uses synthetic in-memory data only; it never connects to the self-hosted server, PostgreSQL, or household financial data.
+
 ## Development commands
 
 ```sh
@@ -38,6 +42,7 @@ mise run check
 mise run test
 mise run verify
 mise run frontend:check
+mise run frontend:demo
 mise run frontend:run
 mise run package
 mise run ci

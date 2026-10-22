@@ -93,7 +93,7 @@ rm -rf "${frontend_build_dir}"
 log "Building the production frontend."
 (
   cd "${repository_root}/client"
-  gleam run -m lustre/dev build --outdir=build/release-frontend
+  gleam run -m lustre/dev build cabanon_frontend --outdir=build/release-frontend
 )
 [[ -f "${frontend_build_dir}/index.html" ]] \
   || fail "Production frontend build did not produce index.html."

@@ -27,7 +27,9 @@ mise run frontend:run
 
 The Lustre development server is available at `http://localhost:1234` and watches `client/src/` and `client/assets/`. The household calculator remains in the browser; the current budget autosaves, while monthly contribution snapshots are recorded only when you explicitly choose a month and select **Save this month**. Archived months cannot be replaced and retain their expense details and calculation results. The history panel compares each period's expenses, balance used, contributions, and base share per person with the closest earlier archived month. The construction screen loads its history and categories from the Erlang API and saves new entries to PostgreSQL. The JavaScript client and Erlang server both use the pure domain package in `shared/`.
 
-Run `mise run frontend:check` to format-check, type-check, and build the browser bundle. The first build downloads Bun through Lustre Dev Tools if it is not already available.
+Run `mise run frontend:check` to format-check, type-check, and build the production browser bundle. The first build downloads Bun through Lustre Dev Tools if it is not already available.
+
+`mise run frontend:demo` builds the static GitHub Pages demo with synthetic in-memory data. It is deployed automatically by `.github/workflows/pages.yaml` after verification on pushes to `main`, at `https://mazama923.github.io/cabanon/`. The demo does not make API requests and all changes stay in the current browser session.
 
 ## Local database
 
@@ -109,6 +111,7 @@ CABANON_ALLOWED_ORIGIN=https://cabanon.example.com
 mise run format-check
 mise run check
 mise run frontend:check
+mise run frontend:demo
 mise run test
 mise run security:secrets
 mise run ci
