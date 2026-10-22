@@ -25,6 +25,7 @@ type Section {
 
 type Model {
   Model(
+    demo: Bool,
     section: Section,
     people: String,
     balance: String,
@@ -191,14 +192,23 @@ const household_api_url = "http://localhost:8080/api/household"
 const household_history_api_url = "http://localhost:8080/api/household/history"
 
 pub fn main() {
+  start(False)
+}
+
+pub fn start_demo() {
+  start(True)
+}
+
+fn start(demo: Bool) {
   let app = lustre.application(init, update, view)
-  let assert Ok(_) = lustre.start(app, "#app", Nil)
+  let assert Ok(_) = lustre.start(app, "#app", demo)
   Nil
 }
 
-fn init(_flags: Nil) -> #(Model, Effect(Message)) {
+fn init(demo: Bool) -> #(Model, Effect(Message)) {
   let model =
     Model(
+      demo:,
       section: HouseholdSection,
       people: "",
       balance: "",
@@ -241,28 +251,87 @@ fn init(_flags: Nil) -> #(Model, Effect(Message)) {
       history_saving: False,
       history_error: "",
     )
-  let load_construction =
-    rsvp.get(
-      construction_api_url,
-      rsvp.expect_json(construction_data_decoder(), fn(result) {
-        ConstructionLoaded(result)
-      }),
-    )
-  let load_household =
-    rsvp.get(
-      household_api_url,
-      rsvp.expect_json(household_data_decoder(), fn(result) {
-        HouseholdLoaded(result)
-      }),
-    )
-  let load_history =
-    rsvp.get(
-      household_history_api_url,
-      rsvp.expect_json(decode.list(contribution_history_decoder()), fn(result) {
-        ContributionHistoryLoaded(result)
-      }),
-    )
-  #(model, effect.batch([load_construction, load_household, load_history]))
+  case demo {
+    True -> #(demo_model(model), effect.none())
+    False -> {
+      let load_construction =
+        rsvp.get(
+          construction_api_url,
+          rsvp.expect_json(construction_data_decoder(), fn(result) {
+            ConstructionLoaded(result)
+          }),
+        )
+      let load_household =
+        rsvp.get(
+          household_api_url,
+          rsvp.expect_json(household_data_decoder(), fn(result) {
+            HouseholdLoaded(result)
+          }),
+        )
+      let load_history =
+        rsvp.get(
+          household_history_api_url,
+          rsvp.expect_json(
+            decode.list(contribution_history_decoder()),
+            fn(result) { ContributionHistoryLoaded(result) },
+          ),
+        )
+      #(model, effect.batch([load_construction, load_household, load_history]))
+    }
+  }
+}
+
+fn demo_model(model: Model) -> Model {
+  Model(
+    ..model,
+    people: "2",
+    balance: "245.00",
+    expenses: [
+      ExpenseLine(id: 1, label: "Rent", amount: "1200.00"),
+      ExpenseLine(id: 2, label: "Electricity", amount: "85.00"),
+      ExpenseLine(id: 3, label: "Groceries", amount: "425.00"),
+      ExpenseLine(id: 4, label: "Home insurance", amount: "168.00"),
+    ],
+    next_id: 5,
+    construction_costs: [
+      CostRecord(
+        "demo-foundation",
+        construction_costs.ActualCost(
+          incurred_on: "2026-04-16",
+          description: "Foundation work",
+          category: "Structure",
+          amount_cents: 1_860_000,
+        ),
+        0,
+      ),
+      CostRecord(
+        "demo-kitchen",
+        construction_costs.ActualCost(
+          incurred_on: "2026-05-09",
+          description: "Kitchen cabinetry",
+          category: "Interior",
+          amount_cents: 742_500,
+        ),
+        0,
+      ),
+      CostRecord(
+        "demo-garden",
+        construction_costs.ActualCost(
+          incurred_on: "2026-06-02",
+          description: "Garden paving",
+          category: "Exterior",
+          amount_cents: 326_800,
+        ),
+        0,
+      ),
+    ],
+    construction_categories: ["Structure", "Interior", "Exterior"],
+    selected_category: "Structure",
+    construction_loading: False,
+    household_ready: True,
+    household_status: BudgetSaved,
+    history_loading: False,
+  )
 }
 
 fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
@@ -499,20 +568,55 @@ fn save_contribution_history(model: Model) -> #(Model, Effect(Message)) {
   case can_archive_contributions(model) {
     False -> no_effect(model)
     True ->
-      case household_data(model) {
-        Error(Nil) -> no_effect(model)
-        Ok(data) -> {
-          let save =
-            rsvp.post(
-              household_history_api_url,
-              contribution_archive_to_json(model.history_period, data),
-              rsvp.expect_json(contribution_history_decoder(), fn(result) {
-                ContributionHistorySaved(result)
-              }),
-            )
-          #(Model(..model, history_saving: True, history_error: ""), save)
-        }
+      case model.demo {
+        True -> save_demo_contribution_history(model)
+        False ->
+          case household_data(model) {
+            Error(Nil) -> no_effect(model)
+            Ok(data) -> {
+              let save =
+                rsvp.post(
+                  household_history_api_url,
+                  contribution_archive_to_json(model.history_period, data),
+                  rsvp.expect_json(contribution_history_decoder(), fn(result) {
+                    ContributionHistorySaved(result)
+                  }),
+                )
+              #(Model(..model, history_saving: True, history_error: ""), save)
+            }
+          }
       }
+  }
+}
+
+fn save_demo_contribution_history(model: Model) -> #(Model, Effect(Message)) {
+  case household_data(model), calculate_plan(model) {
+    Ok(HouseholdData(people_count, account_balance_cents, expenses)),
+      Ok(household_budget.ContributionPlan(
+        expenses_total_cents,
+        balance_applied_cents,
+        remaining_balance_cents,
+        contribution_total_cents,
+        base_share_cents,
+        residents_paying_one_extra_cent,
+      ))
+    ->
+      contribution_history_saved(
+        model,
+        Ok(ContributionHistoryEntry(
+          period: model.history_period,
+          people_count:,
+          account_balance_cents:,
+          expenses_total_cents:,
+          balance_applied_cents:,
+          remaining_balance_cents:,
+          contribution_total_cents:,
+          base_share_cents:,
+          residents_paying_one_extra_cent:,
+          expenses:,
+        )),
+      )
+    _, _ -> no_effect(model)
   }
 }
 
@@ -657,23 +761,27 @@ fn no_effect(model: Model) -> #(Model, Effect(Message)) {
 fn household_changed(model: Model) -> #(Model, Effect(Message)) {
   case model.household_ready {
     False -> no_effect(model)
-    True -> {
-      let revision = model.household_revision + 1
-      let model =
-        Model(
-          ..model,
-          household_revision: revision,
-          household_status: BudgetWaiting,
-        )
-      let timer =
-        effect.from(fn(dispatch) {
-          let _ =
-            promise.wait(450)
-            |> promise.tap(fn(_) { dispatch(HouseholdSaveReady(revision)) })
-          Nil
-        })
-      #(model, timer)
-    }
+    True ->
+      case model.demo {
+        True -> no_effect(Model(..model, household_status: BudgetSaved))
+        False -> {
+          let revision = model.household_revision + 1
+          let model =
+            Model(
+              ..model,
+              household_revision: revision,
+              household_status: BudgetWaiting,
+            )
+          let timer =
+            effect.from(fn(dispatch) {
+              let _ =
+                promise.wait(450)
+                |> promise.tap(fn(_) { dispatch(HouseholdSaveReady(revision)) })
+              Nil
+            })
+          #(model, timer)
+        }
+      }
   }
 }
 
@@ -937,28 +1045,50 @@ fn add_actual_cost(model: Model) -> #(Model, Effect(Message)) {
           case construction_costs.summarise_actual_costs([cost]) {
             Error(_) -> no_effect(Model(..model, cost_form_error: True))
             Ok(_) -> {
-              let construction_costs.ActualCost(
-                incurred_on:,
-                description:,
-                category:,
-                amount_cents:,
-              ) = cost
-              let body =
-                json.object([
-                  #("incurred_on", json.string(incurred_on)),
-                  #("description", json.string(description)),
-                  #("category", json.string(category)),
-                  #("amount_cents", json.int(amount_cents)),
-                ])
-              let save_cost =
-                rsvp.post(
-                  construction_api_url <> "/costs",
-                  body,
-                  rsvp.expect_json(cost_record_decoder(), fn(result) {
-                    ConstructionCostSaved(result)
-                  }),
-                )
-              #(Model(..model, cost_saving: True, api_error: ""), save_cost)
+              case model.demo {
+                True ->
+                  no_effect(
+                    Model(
+                      ..model,
+                      construction_costs: list.append(model.construction_costs, [
+                        CostRecord(
+                          "demo-" <> int.to_string(model.next_id),
+                          cost,
+                          0,
+                        ),
+                      ]),
+                      next_id: model.next_id + 1,
+                      cost_description: "",
+                      cost_amount: "",
+                      cost_form_error: False,
+                      api_error: "",
+                    ),
+                  )
+                False -> {
+                  let construction_costs.ActualCost(
+                    incurred_on:,
+                    description:,
+                    category:,
+                    amount_cents:,
+                  ) = cost
+                  let body =
+                    json.object([
+                      #("incurred_on", json.string(incurred_on)),
+                      #("description", json.string(description)),
+                      #("category", json.string(category)),
+                      #("amount_cents", json.int(amount_cents)),
+                    ])
+                  let save_cost =
+                    rsvp.post(
+                      construction_api_url <> "/costs",
+                      body,
+                      rsvp.expect_json(cost_record_decoder(), fn(result) {
+                        ConstructionCostSaved(result)
+                      }),
+                    )
+                  #(Model(..model, cost_saving: True, api_error: ""), save_cost)
+                }
+              }
             }
           }
         }
@@ -1033,41 +1163,75 @@ fn save_cost_correction(model: Model) -> #(Model, Effect(Message)) {
                     Error(_) ->
                       no_effect(Model(..model, correction_form_error: True))
                     Ok(_) -> {
-                      let construction_costs.ActualCost(
-                        incurred_on:,
-                        description:,
-                        category:,
-                        amount_cents:,
-                      ) = cost
-                      let body =
-                        json.object([
-                          #("incurred_on", json.string(incurred_on)),
-                          #("description", json.string(description)),
-                          #("category", json.string(category)),
-                          #("amount_cents", json.int(amount_cents)),
+                      case model.demo {
+                        True -> save_demo_cost_correction(model, id, cost)
+                        False -> {
+                          let construction_costs.ActualCost(
+                            incurred_on:,
+                            description:,
+                            category:,
+                            amount_cents:,
+                          ) = cost
+                          let body =
+                            json.object([
+                              #("incurred_on", json.string(incurred_on)),
+                              #("description", json.string(description)),
+                              #("category", json.string(category)),
+                              #("amount_cents", json.int(amount_cents)),
+                              #(
+                                "reason",
+                                json.string(string.trim(model.correction_reason)),
+                              ),
+                            ])
+                          let save =
+                            rsvp.put(
+                              construction_api_url <> "/costs/" <> id,
+                              body,
+                              rsvp.expect_json(
+                                cost_record_decoder(),
+                                fn(result) { CostCorrectionSaved(id, result) },
+                              ),
+                            )
                           #(
-                            "reason",
-                            json.string(string.trim(model.correction_reason)),
-                          ),
-                        ])
-                      let save =
-                        rsvp.put(
-                          construction_api_url <> "/costs/" <> id,
-                          body,
-                          rsvp.expect_json(cost_record_decoder(), fn(result) {
-                            CostCorrectionSaved(id, result)
-                          }),
-                        )
-                      #(
-                        Model(..model, correction_saving: True, api_error: ""),
-                        save,
-                      )
+                            Model(
+                              ..model,
+                              correction_saving: True,
+                              api_error: "",
+                            ),
+                            save,
+                          )
+                        }
+                      }
                     }
                   }
               }
             }
           }
       }
+  }
+}
+
+fn save_demo_cost_correction(
+  model: Model,
+  id: String,
+  cost: construction_costs.ActualCost,
+) -> #(Model, Effect(Message)) {
+  case find_cost_record(model.construction_costs, id) {
+    None -> no_effect(model)
+    Some(CostRecord(_, _, correction_count)) ->
+      no_effect(
+        Model(
+          ..model,
+          construction_costs: update_cost_record(
+            model.construction_costs,
+            id,
+            CostRecord(id, cost, correction_count + 1),
+          ),
+          correction_saving: False,
+          api_error: "",
+        )
+        |> clear_cost_correction_form,
+      )
   }
 }
 
@@ -1128,23 +1292,37 @@ fn load_cost_corrections(
   model: Model,
   id: String,
 ) -> #(Model, Effect(Message)) {
-  let load =
-    rsvp.get(
-      construction_api_url <> "/costs/" <> id <> "/corrections",
-      rsvp.expect_json(decode.list(cost_correction_decoder()), fn(result) {
-        CostCorrectionsLoaded(id, result)
-      }),
-    )
-  #(
-    Model(
-      ..model,
-      correction_history_id: Some(id),
-      cost_corrections: [],
-      correction_history_loading: True,
-      correction_history_error: False,
-    ),
-    load,
-  )
+  case model.demo {
+    True ->
+      no_effect(
+        Model(
+          ..model,
+          correction_history_id: Some(id),
+          cost_corrections: [],
+          correction_history_loading: False,
+          correction_history_error: False,
+        ),
+      )
+    False -> {
+      let load =
+        rsvp.get(
+          construction_api_url <> "/costs/" <> id <> "/corrections",
+          rsvp.expect_json(decode.list(cost_correction_decoder()), fn(result) {
+            CostCorrectionsLoaded(id, result)
+          }),
+        )
+      #(
+        Model(
+          ..model,
+          correction_history_id: Some(id),
+          cost_corrections: [],
+          correction_history_loading: True,
+          correction_history_error: False,
+        ),
+        load,
+      )
+    }
+  }
 }
 
 fn cost_corrections_loaded(
@@ -1210,17 +1388,34 @@ fn save_category(model: Model) -> #(Model, Effect(Message)) {
     || category_exists(model.construction_categories, category)
   {
     True -> no_effect(model)
-    False -> {
-      let save_category =
-        rsvp.post(
-          construction_api_url <> "/categories",
-          json.object([#("name", json.string(category))]),
-          rsvp.expect_json(category_decoder(), fn(result) {
-            CategorySaved(result)
-          }),
-        )
-      #(Model(..model, category_saving: True, api_error: ""), save_category)
-    }
+    False ->
+      case model.demo {
+        True ->
+          no_effect(
+            Model(
+              ..model,
+              construction_categories: list.append(
+                model.construction_categories,
+                [category],
+              ),
+              selected_category: category,
+              category_form_open: False,
+              new_category: "",
+              api_error: "",
+            ),
+          )
+        False -> {
+          let save_category =
+            rsvp.post(
+              construction_api_url <> "/categories",
+              json.object([#("name", json.string(category))]),
+              rsvp.expect_json(category_decoder(), fn(result) {
+                CategorySaved(result)
+              }),
+            )
+          #(Model(..model, category_saving: True, api_error: ""), save_category)
+        }
+      }
   }
 }
 
@@ -1501,7 +1696,10 @@ fn view_household(model: Model) -> Element(Message) {
           ],
         ),
         html.p([class(household_note_class), attribute("aria-live", "polite")], [
-          html.text(household_status_note(model.household_status)),
+          html.text(case model.demo {
+            True -> "Demo data stays in this browser session."
+            False -> household_status_note(model.household_status)
+          }),
         ]),
       ]),
     ]),
@@ -2278,9 +2476,11 @@ fn view_construction(model: Model) -> Element(Message) {
           ),
         ]),
         html.p([class("privacy-note")], [
-          html.text(
-            "Construction costs and categories are saved to PostgreSQL.",
-          ),
+          html.text(case model.demo {
+            True -> "Demo data stays in this browser session."
+            False ->
+              "Construction costs and categories are saved to PostgreSQL."
+          }),
         ]),
       ]),
       category_form,
