@@ -100,6 +100,7 @@ cp -a "${release_dir}/frontend" "${staging_dir}/frontend"
 cp -a "${release_dir}/migrations" "${staging_dir}/migrations"
 install -m 0644 "${release_dir}/manifest.json" "${staging_dir}/manifest.json"
 chown -R root:cabanon "${staging_dir}"
+chmod 0750 "${staging_dir}"
 
 previous_release=""
 if [[ -L "${CABANON_CURRENT_LINK}" ]]; then

@@ -88,7 +88,20 @@ mise run package
 
 This writes `dist/cabanon-erlang-shipment.tar.gz` and its SHA-256 checksum. The target host needs Debian 13 Erlang/OTP `27.3.4.1`; it does not need Gleam, Mise, Docker, or Podman.
 
-For a complete production release bundle, use `./scripts/package-release.sh`. It includes the Erlang shipment, compiled frontend, migrations, systemd unit, installer scripts, manifest, and checksums. CI runs it after verification and security scanning on every successful push to `main`, uploads the resulting archive as a seven-day GitHub Actions artifact, and attaches it to the `main-<short-sha>` GitHub pre-release. The workflow has no deployment credentials and does not deploy the artifact.
+For a complete production release bundle, use `./scripts/package-release.sh`. It includes the Erlang shipment, compiled frontend, migrations, systemd unit, installer scripts, manifest, and checksums. CI runs it after verification and security scanning: a `vMAJOR.MINOR.PATCH` tag creates a stable GitHub release, while a successful push to `main` creates a `main-<short-sha>` pre-release. Each archive is also retained as a seven-day GitHub Actions artifact. The workflow has no deployment credentials and does not deploy the artifact.
+
+## Publish a stable release
+
+Create annotated tags only from the reviewed commit on `main`. The CI workflow validates the tag format, verifies the source, then publishes the release asset without accessing production:
+
+```sh
+git switch main
+git pull --ff-only origin main
+git tag -a v1.2.3 -m "v1.2.3"
+git push origin v1.2.3
+```
+
+Use only `vMAJOR.MINOR.PATCH` tags. Treat published tags as immutable; publish a new patch version for a correction.
 
 ## Production configuration
 

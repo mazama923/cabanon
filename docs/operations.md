@@ -10,7 +10,7 @@ Cabanon has no application-level accounts or roles. A production deployment must
 
 ## Application LXC bootstrap
 
-Install from a downloaded and extracted `main-<short-sha>` GitHub pre-release on a Debian 13 LXC. Run the bundled interactive installer as root:
+Install from a downloaded and extracted `vMAJOR.MINOR.PATCH` stable GitHub release on a Debian 13 LXC. Run the bundled interactive installer as root:
 
 ```sh
 sudo ./installer/install.sh
@@ -22,12 +22,12 @@ For a new installation it prompts for the private non-loopback bind address and 
 
 ## Release deployment
 
-Use the `main-<short-sha>` GitHub pre-release produced by the successful CI run. CI runs verification and security scanning, builds the frontend and release bundle, retains it as a seven-day Actions artifact, and attaches it to the pre-release. CI has no deployment credentials and never accesses the application LXC.
+Use a stable `vMAJOR.MINOR.PATCH` GitHub release for production. CI runs verification and security scanning, builds the frontend and release bundle, retains it as a seven-day Actions artifact, and attaches it to the release. Successful pushes to `main` also create `main-<short-sha>` pre-releases for testing. CI has no deployment credentials and never accesses the application LXC.
 
 For an update, download and extract the release bundle on the application LXC, then run its non-interactive deployment script:
 
 ```sh
-sudo ./installer/deploy.sh --release-dir ./cabanon-release-main-<short-sha>
+sudo ./installer/deploy.sh --release-dir ./cabanon-release-vMAJOR.MINOR.PATCH
 ```
 
 `deploy.sh` verifies the bundle and shipment checksums, confirms Debian 13 OTP compatibility, applies pending migrations, installs an immutable release, updates the `current` link atomically, restarts systemd, and waits for `/readyz`. If the new release fails to start or become ready, it restores the preceding release automatically. It does not recreate database roles, overwrite the environment file, or prompt for secrets.

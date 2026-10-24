@@ -23,7 +23,7 @@ Cabanon processes household financial information. Treat it as sensitive even wh
 ## Delivery and host
 
 - Pin build tools with `mise.toml` and commit `manifest.toml` after dependency changes.
-- Run formatting, type checking, tests, Gitleaks, and filesystem/dependency scanning in CI. Successful pushes to `main` publish a `main-<short-sha>` pre-release with the verified release bundle; CI has no deployment credentials.
+- Run formatting, type checking, tests, Gitleaks, and filesystem/dependency scanning in CI. Valid `vMAJOR.MINOR.PATCH` tags publish stable releases with the verified release bundle; successful pushes to `main` publish `main-<short-sha>` pre-releases. CI has no deployment credentials.
 - Deploy only with the bundled `installer/install.sh` and `installer/deploy.sh`. They verify release checksums and Debian 13 OTP `27.3.4.1`, retain the prior release for rollback, and check `/readyz` after deployment.
 - Run the systemd service as the dedicated `cabanon` user. Keep `/etc/cabanon/cabanon.env` owned by root with mode `0600`.
 - Apply the hardening controls in `infra/systemd/cabanon.service`; do not enable `MemoryDenyWriteExecute` without testing it against the Erlang JIT.

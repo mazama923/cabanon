@@ -49,7 +49,7 @@ mise run ci
 mise tasks
 ```
 
-`mise run package` creates an Erlang shipment archive in `dist/` for local packaging checks. Production releases are built by `scripts/package-release.sh` in CI and published as `main-<short-sha>` GitHub pre-releases, including the frontend, migrations, systemd unit, and installer scripts. The Debian 13 target needs Erlang/OTP `27.3.4.1`, but not Gleam, Mise, Docker, or Podman.
+`mise run package` creates an Erlang shipment archive in `dist/` for local packaging checks. Production releases are built by `scripts/package-release.sh` in CI: a `vMAJOR.MINOR.PATCH` tag creates a stable GitHub release, while successful pushes to `main` create `main-<short-sha>` pre-releases. Each bundle includes the frontend, migrations, systemd unit, and installer scripts. The Debian 13 target needs Erlang/OTP `27.3.4.1`, but not Gleam, Mise, Docker, or Podman.
 
 See [Development](docs/development.md) for the local PostgreSQL workflow and [Operations](docs/operations.md) for installer-based deployment and the remaining operator responsibilities.
 
