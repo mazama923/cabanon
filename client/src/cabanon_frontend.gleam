@@ -1,3 +1,4 @@
+import api_url
 import cabanon/domain/construction/costs as construction_costs
 import cabanon/domain/household/budget as household_budget
 import cabanon/domain/household/money as household_money
@@ -185,11 +186,17 @@ type CalculationProblem {
   InvalidBalance
 }
 
-const construction_api_url = "http://localhost:8080/api/construction"
+fn construction_api_url() -> String {
+  api_url.base_url() <> "/api/construction"
+}
 
-const household_api_url = "http://localhost:8080/api/household"
+fn household_api_url() -> String {
+  api_url.base_url() <> "/api/household"
+}
 
-const household_history_api_url = "http://localhost:8080/api/household/history"
+fn household_history_api_url() -> String {
+  api_url.base_url() <> "/api/household/history"
+}
 
 pub fn main() {
   start(False)
@@ -256,21 +263,21 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
     False -> {
       let load_construction =
         rsvp.get(
-          construction_api_url,
+          construction_api_url(),
           rsvp.expect_json(construction_data_decoder(), fn(result) {
             ConstructionLoaded(result)
           }),
         )
       let load_household =
         rsvp.get(
-          household_api_url,
+          household_api_url(),
           rsvp.expect_json(household_data_decoder(), fn(result) {
             HouseholdLoaded(result)
           }),
         )
       let load_history =
         rsvp.get(
-          household_history_api_url,
+          household_history_api_url(),
           rsvp.expect_json(
             decode.list(contribution_history_decoder()),
             fn(result) { ContributionHistoryLoaded(result) },
@@ -576,7 +583,7 @@ fn save_contribution_history(model: Model) -> #(Model, Effect(Message)) {
             Ok(data) -> {
               let save =
                 rsvp.post(
-                  household_history_api_url,
+                  household_history_api_url(),
                   contribution_archive_to_json(model.history_period, data),
                   rsvp.expect_json(contribution_history_decoder(), fn(result) {
                     ContributionHistorySaved(result)
@@ -833,7 +840,7 @@ fn begin_household_save(
     Ok(data) -> {
       let save =
         rsvp.put(
-          household_api_url,
+          household_api_url(),
           household_data_to_json(data),
           rsvp.expect_json(household_data_decoder(), fn(result) {
             HouseholdSaved(revision, result)
@@ -1080,7 +1087,7 @@ fn add_actual_cost(model: Model) -> #(Model, Effect(Message)) {
                     ])
                   let save_cost =
                     rsvp.post(
-                      construction_api_url <> "/costs",
+                      construction_api_url() <> "/costs",
                       body,
                       rsvp.expect_json(cost_record_decoder(), fn(result) {
                         ConstructionCostSaved(result)
@@ -1185,7 +1192,7 @@ fn save_cost_correction(model: Model) -> #(Model, Effect(Message)) {
                             ])
                           let save =
                             rsvp.put(
-                              construction_api_url <> "/costs/" <> id,
+                              construction_api_url() <> "/costs/" <> id,
                               body,
                               rsvp.expect_json(
                                 cost_record_decoder(),
@@ -1306,7 +1313,7 @@ fn load_cost_corrections(
     False -> {
       let load =
         rsvp.get(
-          construction_api_url <> "/costs/" <> id <> "/corrections",
+          construction_api_url() <> "/costs/" <> id <> "/corrections",
           rsvp.expect_json(decode.list(cost_correction_decoder()), fn(result) {
             CostCorrectionsLoaded(id, result)
           }),
@@ -1407,7 +1414,7 @@ fn save_category(model: Model) -> #(Model, Effect(Message)) {
         False -> {
           let save_category =
             rsvp.post(
-              construction_api_url <> "/categories",
+              construction_api_url() <> "/categories",
               json.object([#("name", json.string(category))]),
               rsvp.expect_json(category_decoder(), fn(result) {
                 CategorySaved(result)
