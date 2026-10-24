@@ -36,6 +36,7 @@ done
 [[ -d "${migrations_dir}" ]] || fail "Migrations directory does not exist: ${migrations_dir}"
 
 require_root
+require_command cat
 require_command psql
 require_command runuser
 
@@ -74,9 +75,10 @@ for migration_path in "${migration_paths[@]}"; do
   fi
 
   log "Applying migration ${migration_file}."
-  runuser -u postgres -- psql --dbname=cabanon --set=ON_ERROR_STOP=1 \
-    --command="SET ROLE cabanon_owner;" \
-    --file="${migration_path}"
+  {
+    printf '%s\n' "SET ROLE cabanon_owner;"
+    cat "${migration_path}"
+  } | runuser -u postgres -- psql --dbname=cabanon --set=ON_ERROR_STOP=1
 
   runuser -u postgres -- psql --dbname=cabanon --set=ON_ERROR_STOP=1 \
     --command="SET ROLE cabanon_owner; INSERT INTO schema_migrations (version, name) VALUES (${version}, '${migration_name}') ON CONFLICT (version) DO NOTHING;"

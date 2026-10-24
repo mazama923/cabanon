@@ -110,11 +110,13 @@ if [[ -L "${CABANON_CURRENT_LINK}" ]]; then
   esac
 fi
 
+log "Applying database migrations for release ${release_version}."
+"${script_dir}/migrate.sh" --migrations-dir "${staging_dir}/migrations"
+
 log "Installing release ${release_version}."
 mv "${staging_dir}" "${target_dir}"
 staging_dir=""
 
-"${script_dir}/migrate.sh" --migrations-dir "${target_dir}/migrations"
 runuser -u postgres -- psql --dbname=cabanon --set=ON_ERROR_STOP=1 --command="
   SET ROLE cabanon_owner;
   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cabanon_app;
