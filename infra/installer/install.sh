@@ -122,7 +122,7 @@ configure_postgresql_network() {
   read -r pg_version pg_cluster <<<"${cluster_info}"
   [[ -n "${pg_version}" && -n "${pg_cluster}" ]] || fail "Unable to identify the PostgreSQL cluster."
 
-  pg_conftool "${pg_version}" "${pg_cluster}" set listen_addresses "127.0.0.1"
+  pg_conftool "${pg_version}" "${pg_cluster}" set listen_addresses "'127.0.0.1'"
   pg_conftool "${pg_version}" "${pg_cluster}" set password_encryption "scram-sha-256"
 
   hba_file="/etc/postgresql/${pg_version}/${pg_cluster}/pg_hba.conf"
@@ -248,8 +248,9 @@ else
   port="8080"
 fi
 
+release_version="$(release_manifest_string "${release_dir}/manifest.json" "release_version")"
 printf '%s\n' "Installation summary:" >&2
-printf '%s\n' "  Release: $(release_manifest_string "${release_dir}/manifest.json" "release_version")" >&2
+printf '%s\n' "  Release: ${release_version}" >&2
 printf '%s\n' "  Bind address: ${bind_address}" >&2
 printf '%s\n' "  Allowed origin: ${allowed_origin}" >&2
 printf '%s\n' "  PostgreSQL: local-only with SCRAM authentication" >&2
