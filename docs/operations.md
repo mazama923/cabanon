@@ -16,9 +16,9 @@ Install from a downloaded and extracted `main-<short-sha>` GitHub pre-release on
 sudo ./installer/install.sh
 ```
 
-The installer verifies the bundle checksums and Debian 13 OTP `27.3.4.1`, installs Erlang and PostgreSQL, configures local-only PostgreSQL with SCRAM authentication, creates the `cabanon` service account and database roles, writes `/etc/cabanon/cabanon.env` at mode `0600`, installs the systemd unit, applies migrations, and verifies `/healthz` and `/readyz`.
+The installer verifies the bundle checksums and Debian 13 OTP `27.3.4.1`, installs Erlang and PostgreSQL, configures local-only PostgreSQL with SCRAM authentication, writes `/etc/cabanon/cabanon.env` at mode `0600`, creates the `cabanon` service account and database roles, installs the systemd unit, applies migrations, and verifies `/healthz` and `/readyz`.
 
-For a new installation it prompts for the private non-loopback bind address and exact public browser origin, then generates or securely accepts the database password and `CABANON_SECRET_KEY_BASE`. The resulting environment sets `CABANON_ENV=production`, `CABANON_DATABASE_URL`, `CABANON_BIND_ADDRESS`, `CABANON_PORT`, and `CABANON_ALLOWED_ORIGIN`. Preserve this environment file; it contains the application and database secrets.
+For a new installation it prompts for the private non-loopback bind address and exact public browser origin, then generates or securely accepts the database password and `CABANON_SECRET_KEY_BASE`. The resulting environment sets `CABANON_ENV=production`, `CABANON_DATABASE_URL`, `CABANON_BIND_ADDRESS`, `CABANON_PORT`, and `CABANON_ALLOWED_ORIGIN`. Preserve this environment file; it contains the application and database secrets. The installer can be rerun after a failed installation: it preserves these secrets, waits for the selected PostgreSQL cluster to accept local connections, and completes missing database objects and grants.
 
 ## Release deployment
 

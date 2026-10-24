@@ -72,6 +72,36 @@ read_new_secrets() {
     || fail "CABANON_SECRET_KEY_BASE must be exactly 64 hexadecimal characters."
 }
 
+write_environment() {
+  environment_tmp="$(mktemp /etc/cabanon/.cabanon.env.XXXXXX)"
+  cat >"${environment_tmp}" <<ENVIRONMENT
+CABANON_ENV=production
+CABANON_SECRET_KEY_BASE=${secret_key_base}
+CABANON_DATABASE_URL=postgresql://cabanon_app:${app_password}@127.0.0.1:5432/cabanon?sslmode=disable
+CABANON_BIND_ADDRESS=${bind_address}
+CABANON_PORT=${port}
+CABANON_ALLOWED_ORIGIN=${allowed_origin}
+ENVIRONMENT
+  chown root:root "${environment_tmp}"
+  chmod 0600 "${environment_tmp}"
+  mv -f "${environment_tmp}" "${CABANON_ENV_FILE}"
+  environment_tmp=""
+}
+
+load_existing_secrets() {
+  local database_url
+
+  secret_key_base="$(environment_value "${CABANON_ENV_FILE}" "CABANON_SECRET_KEY_BASE")"
+  database_url="$(environment_value "${CABANON_ENV_FILE}" "CABANON_DATABASE_URL")"
+  [[ "${secret_key_base}" =~ ^[A-Fa-f0-9]{64}$ ]] \
+    || fail "Existing CABANON_SECRET_KEY_BASE must be exactly 64 hexadecimal characters."
+  if [[ "${database_url}" =~ ^postgresql://cabanon_app:([A-Za-z0-9._~-]{32,})@127\.0\.0\.1:5432/cabanon\?sslmode=disable$ ]]; then
+    app_password="${BASH_REMATCH[1]}"
+  else
+    fail "Existing CABANON_DATABASE_URL does not match the Cabanon local PostgreSQL configuration."
+  fi
+}
+
 postgresql_scalar() {
   runuser -u postgres -- psql --tuples-only --no-align --set=ON_ERROR_STOP=1 \
     --command="$1" | tr -d '[:space:]'
@@ -83,7 +113,7 @@ postgresql_object_exists() {
 }
 
 configure_postgresql_network() {
-  local cluster_info pg_version pg_cluster hba_file hba_tmp
+  local cluster_info pg_version pg_cluster hba_file hba_tmp attempt
 
   require_command pg_lsclusters
   require_command pg_conftool
@@ -111,7 +141,17 @@ HBA
   mv -f "${hba_tmp}" "${hba_file}"
   postgres_hba_tmp=""
 
-  systemctl restart postgresql.service
+  systemctl restart "postgresql@${pg_version}-${pg_cluster}.service" \
+    || fail "Unable to restart PostgreSQL cluster ${pg_version}/${pg_cluster}. Inspect: journalctl -u postgresql@${pg_version}-${pg_cluster}.service."
+
+  for ((attempt = 1; attempt <= 30; attempt += 1)); do
+    if runuser -u postgres -- psql --dbname=postgres --quiet --command="SELECT 1;" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+
+  fail "PostgreSQL cluster ${pg_version}/${pg_cluster} did not accept local connections. Inspect: pg_lsclusters; journalctl -u postgresql@${pg_version}-${pg_cluster}.service."
 }
 
 create_database_roles_and_database() {
@@ -127,22 +167,28 @@ create_database_roles_and_database() {
   postgresql_object_exists "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'cabanon');" \
     && database_exists="true"
 
-  if [[ "${existing_environment}" == "true" ]]; then
-    [[ "${owner_exists}" == "true" && "${app_exists}" == "true" && "${database_exists}" == "true" ]] \
-      || fail "Existing Cabanon environment is incomplete; refusing to recreate database credentials automatically."
-    database_owner="$(postgresql_scalar "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'cabanon';")"
-    [[ "${database_owner}" == "cabanon_owner" ]] \
-      || fail "Existing cabanon database is not owned by cabanon_owner; refusing an ambiguous change."
-    return
+  if [[ "${existing_environment}" == "false" ]]; then
+    [[ "${owner_exists}" == "false" && "${app_exists}" == "false" && "${database_exists}" == "false" ]] \
+      || fail "Cabanon PostgreSQL roles or database already exist without ${CABANON_ENV_FILE}; refusing an ambiguous destructive action."
   fi
 
-  [[ "${owner_exists}" == "false" && "${app_exists}" == "false" && "${database_exists}" == "false" ]] \
-    || fail "Cabanon PostgreSQL roles or database already exist without ${CABANON_ENV_FILE}; refusing an ambiguous destructive action."
+  if [[ "${owner_exists}" == "false" ]]; then
+    runuser -u postgres -- psql --set=ON_ERROR_STOP=1 --command="CREATE ROLE cabanon_owner NOLOGIN;"
+  fi
+  if [[ "${app_exists}" == "false" ]]; then
+    printf "CREATE ROLE cabanon_app LOGIN PASSWORD '%s';\n" "${app_password}" \
+      | runuser -u postgres -- psql --set=ON_ERROR_STOP=1
+  else
+    printf "ALTER ROLE cabanon_app LOGIN PASSWORD '%s';\n" "${app_password}" \
+      | runuser -u postgres -- psql --set=ON_ERROR_STOP=1
+  fi
+  if [[ "${database_exists}" == "false" ]]; then
+    runuser -u postgres -- psql --set=ON_ERROR_STOP=1 --command="CREATE DATABASE cabanon OWNER cabanon_owner;"
+  fi
 
-  runuser -u postgres -- psql --set=ON_ERROR_STOP=1 --command="CREATE ROLE cabanon_owner NOLOGIN;"
-  printf "CREATE ROLE cabanon_app LOGIN PASSWORD '%s';\n" "${app_password}" \
-    | runuser -u postgres -- psql --set=ON_ERROR_STOP=1
-  runuser -u postgres -- psql --set=ON_ERROR_STOP=1 --command="CREATE DATABASE cabanon OWNER cabanon_owner;"
+  database_owner="$(postgresql_scalar "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'cabanon';")"
+  [[ "${database_owner}" == "cabanon_owner" ]] \
+    || fail "Existing cabanon database is not owned by cabanon_owner; refusing an ambiguous change."
 
   runuser -u postgres -- psql --dbname=cabanon --set=ON_ERROR_STOP=1 --command="
     REVOKE ALL ON DATABASE cabanon FROM PUBLIC;
@@ -190,7 +236,8 @@ if [[ -f "${CABANON_ENV_FILE}" ]]; then
   allowed_origin="$(environment_value "${CABANON_ENV_FILE}" "CABANON_ALLOWED_ORIGIN")"
   is_valid_allowed_origin "${allowed_origin}" \
     || fail "Existing CABANON_ALLOWED_ORIGIN is invalid; use an absolute http or https origin without a path."
-  log "An existing Cabanon environment was found; existing secrets will be preserved."
+  load_existing_secrets
+  log "An existing Cabanon environment was found; existing secrets will be preserved and incomplete database setup will resume."
 else
   read -r -p "Private Cabanon bind address: " bind_address
   is_safe_bind_address "${bind_address}" \
@@ -241,26 +288,11 @@ install -d -o cabanon -g cabanon -m 0750 /var/lib/cabanon
 
 if [[ "${existing_environment}" == "false" ]]; then
   read_new_secrets
+  write_environment
 fi
 
 configure_postgresql_network
 create_database_roles_and_database
-
-if [[ "${existing_environment}" == "false" ]]; then
-  environment_tmp="$(mktemp /etc/cabanon/.cabanon.env.XXXXXX)"
-  cat >"${environment_tmp}" <<ENVIRONMENT
-CABANON_ENV=production
-CABANON_SECRET_KEY_BASE=${secret_key_base}
-CABANON_DATABASE_URL=postgresql://cabanon_app:${app_password}@127.0.0.1:5432/cabanon?sslmode=disable
-CABANON_BIND_ADDRESS=${bind_address}
-CABANON_PORT=${port}
-CABANON_ALLOWED_ORIGIN=${allowed_origin}
-ENVIRONMENT
-  chown root:root "${environment_tmp}"
-  chmod 0600 "${environment_tmp}"
-  mv -f "${environment_tmp}" "${CABANON_ENV_FILE}"
-  environment_tmp=""
-fi
 
 install -o root -g root -m 0644 "${release_dir}/systemd/cabanon.service" \
   "/etc/systemd/system/${CABANON_SERVICE_NAME}"
