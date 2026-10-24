@@ -102,7 +102,7 @@ verify_release_bundle() {
   log "Verifying release checksums."
   (
     cd "${release_dir}"
-    sha256sum --check --strict checksums.sha256
+    sha256sum --check --strict checksums.sha256 >&2
   ) || fail "Release checksum verification failed. Download the release again."
 
   manifest_path="${release_dir}/manifest.json"
