@@ -113,7 +113,7 @@ postgresql_object_exists() {
 }
 
 configure_postgresql_network() {
-  local cluster_info pg_version pg_cluster hba_file hba_tmp attempt
+  local cluster_info pg_version pg_cluster postgresql_conf hba_file hba_tmp attempt
 
   require_command pg_lsclusters
   require_command pg_conftool
@@ -122,7 +122,11 @@ configure_postgresql_network() {
   read -r pg_version pg_cluster <<<"${cluster_info}"
   [[ -n "${pg_version}" && -n "${pg_cluster}" ]] || fail "Unable to identify the PostgreSQL cluster."
 
-  pg_conftool "${pg_version}" "${pg_cluster}" set listen_addresses "'127.0.0.1'"
+  postgresql_conf="/etc/postgresql/${pg_version}/${pg_cluster}/postgresql.conf"
+  [[ -f "${postgresql_conf}" ]] || fail "PostgreSQL configuration file is missing: ${postgresql_conf}"
+  sed -i -E "s/^[[:space:]]*#?[[:space:]]*listen_addresses[[:space:]]*=.*/listen_addresses = '127.0.0.1'/" "${postgresql_conf}"
+  grep -Eq "^[[:space:]]*listen_addresses[[:space:]]*=[[:space:]]*'127\\.0\\.0\\.1'[[:space:]]*$" "${postgresql_conf}" \
+    || fail "Unable to configure PostgreSQL to listen on 127.0.0.1."
   pg_conftool "${pg_version}" "${pg_cluster}" set password_encryption "scram-sha-256"
 
   hba_file="/etc/postgresql/${pg_version}/${pg_cluster}/pg_hba.conf"
