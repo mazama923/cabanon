@@ -41,33 +41,33 @@ Gleam, Mise, Docker, and Podman are not required on the application LXC.
 
 ## Release source
 
-Every successful push to `main` that passes verification and security scanning publishes a GitHub pre-release. Its tag and release bundle use this form:
+A valid `vMAJOR.MINOR.PATCH` tag that passes verification and security scanning publishes a stable GitHub release. Its tag and release bundle use this form:
 
 ```text
-main-<12-character-git-sha>
-cabanon-release-main-<12-character-git-sha>.tar.gz
+v1.2.3
+cabanon-release-v1.2.3.tar.gz
 ```
 
-The same bundle is retained as a GitHub Actions artifact for seven days. Prefer the GitHub pre-release asset for normal installation and upgrades. CI has no credentials for, and does not deploy to, the application LXC.
+Successful pushes to `main` also publish `main-<12-character-git-sha>` pre-releases for testing. Every bundle is retained as a GitHub Actions artifact for seven days. Prefer stable release assets for normal installation and upgrades. CI has no credentials for, and does not deploy to, the application LXC.
 
-Use the GitHub Releases page to select the required `main-<sha>` pre-release, then download its `cabanon-release-main-<sha>.tar.gz` asset to the application LXC. For example, after replacing the placeholders with the repository owner, repository name, and release tag:
+Use the GitHub Releases page to select the required stable release, then download its asset to the application LXC. For example, after replacing the placeholders with the repository owner, repository name, and release tag:
 
 ```sh
 mkdir -p /root/cabanon-downloads
 cd /root/cabanon-downloads
 curl --fail --location --remote-name \
-  https://github.com/<owner>/<repository>/releases/download/main-<sha>/cabanon-release-main-<sha>.tar.gz
-tar -xzf cabanon-release-main-<sha>.tar.gz
+  https://github.com/<owner>/<repository>/releases/download/v1.2.3/cabanon-release-v1.2.3.tar.gz
+tar -xzf cabanon-release-v1.2.3.tar.gz
 ```
 
-The extracted directory is named `cabanon-release-main-<sha>`. The bundled installer validates the release manifest and checksums before changing the host. The release asset itself is not separately signed by this repository; obtain it from the expected GitHub repository and protect the GitHub release process accordingly.
+The extracted directory is named `cabanon-release-v1.2.3`. The bundled installer validates the release manifest and checksums before changing the host. The release asset itself is not separately signed by this repository; obtain it from the expected GitHub repository and protect the GitHub release process accordingly.
 
 ## First installation
 
 Run the installer from the extracted release directory as root:
 
 ```sh
-cd /root/cabanon-downloads/cabanon-release-main-<sha>
+cd /root/cabanon-downloads/cabanon-release-v1.2.3
 ./installer/install.sh
 ```
 
@@ -152,14 +152,14 @@ Expected results:
 
 ## Upgrades
 
-Each upgrade is a fresh `main-<sha>` bundle. Download and extract the required pre-release asset, then run its non-interactive deploy script:
+Each upgrade is a fresh stable `vMAJOR.MINOR.PATCH` bundle. Download and extract the required release asset, then run its non-interactive deploy script:
 
 ```sh
 cd /root/cabanon-downloads
 curl --fail --location --remote-name \
-  https://github.com/<owner>/<repository>/releases/download/main-<sha>/cabanon-release-main-<sha>.tar.gz
-tar -xzf cabanon-release-main-<sha>.tar.gz
-cd cabanon-release-main-<sha>
+  https://github.com/<owner>/<repository>/releases/download/v1.2.3/cabanon-release-v1.2.3.tar.gz
+tar -xzf cabanon-release-v1.2.3.tar.gz
+cd cabanon-release-v1.2.3
 ./installer/deploy.sh --release-dir .
 ```
 
