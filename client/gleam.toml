@@ -16,3 +16,4 @@ lustre_dev_tools = ">= 2.4.0 and < 3.0.0"
 [tools.lustre.html]
 title = "Cabanon — Household budget"
 stylesheets = [{ href = "styles.css" }]
+links = [{ rel = "icon", type = "image/svg+xml", href = "favicon.svg" }]
