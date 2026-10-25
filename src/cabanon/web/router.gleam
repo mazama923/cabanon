@@ -58,6 +58,12 @@ pub fn handle_request_with_database_and_origin_and_static(
               household_api.handle_history(request, database, allowed_origin)
             None -> household_api.unavailable(request, allowed_origin)
           }
+        ["api", "household", "month"] ->
+          case database {
+            Some(database) ->
+              household_api.initialize_month(request, database, allowed_origin)
+            None -> household_api.unavailable(request, allowed_origin)
+          }
         ["api", "household"] ->
           case database {
             Some(database) ->

@@ -6,8 +6,10 @@ import cabanon/web/router
 import gleam/erlang/process
 import gleam/http
 import gleam/http/request
+import gleam/int
 import gleam/io
 import gleam/option.{Some}
+import gleam/string
 import gleeunit/should
 import pog
 import wisp/simulate
@@ -117,15 +119,35 @@ pub fn construction_api_round_trips_categories_and_costs_test() {
                 Some(transaction),
               )
             household_initial_response.status |> should.equal(200)
+            let assert Ok(initial_budget) =
+              household_persistence.load(transaction)
+            let household_persistence.HouseholdBudget(period, _, _, _) =
+              initial_budget
             simulate.read_body(household_initial_response)
             |> should.equal(
-              "{\"people_count\":0,\"account_balance_cents\":0,\"expenses\":[]}",
+              "{\"period\":\""
+              <> period
+              <> "\",\"people_count\":0,\"account_balance_cents\":0,\"expenses\":[]}",
             )
+
+            let month_request =
+              simulate.request(http.Post, "/api/household/month")
+              |> simulate.string_body("{\"period\":\"" <> period <> "\"}")
+              |> request.set_header("content-type", "application/json")
+              |> request.set_header("origin", "http://localhost:1234")
+            let month_response =
+              router.handle_request_with_database(
+                month_request,
+                Some(transaction),
+              )
+            month_response.status |> should.equal(200)
 
             let household_request =
               simulate.request(http.Put, "/api/household")
               |> simulate.string_body(
-                "{\"people_count\":3,\"account_balance_cents\":5500,\"expenses\":[{\"label\":\"Rent\",\"amount_cents\":120000},{\"label\":\"Electricity\",\"amount_cents\":8500}]}",
+                "{\"period\":\""
+                <> period
+                <> "\",\"people_count\":3,\"account_balance_cents\":5500,\"expenses\":[{\"label\":\"Rent\",\"category\":\"Housing\",\"is_variable\":false,\"amount_cents\":120000},{\"label\":\"Electricity\",\"category\":\"Utilities\",\"is_variable\":true,\"amount_cents\":8500}]}",
               )
               |> request.set_header("content-type", "application/json")
               |> request.set_header("origin", "http://localhost:1234")
@@ -137,18 +159,31 @@ pub fn construction_api_round_trips_categories_and_costs_test() {
             household_response.status |> should.equal(200)
             simulate.read_body(household_response)
             |> should.equal(
-              "{\"people_count\":3,\"account_balance_cents\":5500,\"expenses\":[{\"label\":\"Rent\",\"amount_cents\":120000},{\"label\":\"Electricity\",\"amount_cents\":8500}]}",
+              "{\"period\":\""
+              <> period
+              <> "\",\"people_count\":3,\"account_balance_cents\":5500,\"expenses\":[{\"label\":\"Rent\",\"category\":\"Housing\",\"is_variable\":false,\"amount_cents\":120000},{\"label\":\"Electricity\",\"category\":\"Utilities\",\"is_variable\":true,\"amount_cents\":8500}]}",
             )
 
             household_persistence.load(transaction)
             |> should.equal(
               Ok(
                 household_persistence.HouseholdBudget(
+                  period:,
                   people_count: 3,
                   account_balance_cents: 5500,
                   expenses: [
-                    household_persistence.ExpenseLine("Rent", 120_000),
-                    household_persistence.ExpenseLine("Electricity", 8500),
+                    household_persistence.ExpenseLine(
+                      "Rent",
+                      "Housing",
+                      False,
+                      120_000,
+                    ),
+                    household_persistence.ExpenseLine(
+                      "Electricity",
+                      "Utilities",
+                      True,
+                      8500,
+                    ),
                   ],
                 ),
               ),
@@ -157,10 +192,16 @@ pub fn construction_api_round_trips_categories_and_costs_test() {
             household_persistence.save(
               transaction,
               household_persistence.HouseholdBudget(
+                period:,
                 people_count: 2,
                 account_balance_cents: 0,
                 expenses: [
-                  household_persistence.ExpenseLine("Rent", 120_000),
+                  household_persistence.ExpenseLine(
+                    "Rent",
+                    "Housing",
+                    False,
+                    120_000,
+                  ),
                 ],
               ),
             )
@@ -169,10 +210,16 @@ pub fn construction_api_round_trips_categories_and_costs_test() {
             |> should.equal(
               Ok(
                 household_persistence.HouseholdBudget(
+                  period:,
                   people_count: 2,
                   account_balance_cents: 0,
                   expenses: [
-                    household_persistence.ExpenseLine("Rent", 120_000),
+                    household_persistence.ExpenseLine(
+                      "Rent",
+                      "Housing",
+                      False,
+                      120_000,
+                    ),
                   ],
                 ),
               ),
@@ -313,6 +360,10 @@ pub fn household_contribution_history_archives_an_immutable_monthly_snapshot_tes
       with_database(database_url, fn(database) {
         let result =
           pog.transaction(database, fn(transaction) {
+            let assert Ok(active_budget) =
+              household_persistence.load(transaction)
+            let household_persistence.HouseholdBudget(active_period, _, _, _) =
+              active_budget
             let initial_history_response =
               router.handle_request_with_database(
                 simulate.request(http.Get, "/api/household/history"),
@@ -324,7 +375,7 @@ pub fn household_contribution_history_archives_an_immutable_monthly_snapshot_tes
             let archive_request =
               simulate.request(http.Post, "/api/household/history")
               |> simulate.string_body(
-                "{\"period\":\"2026-06\",\"people_count\":3,\"account_balance_cents\":5500,\"expenses\":[{\"label\":\"Rent\",\"amount_cents\":120000},{\"label\":\"Electricity\",\"amount_cents\":8500}]}",
+                "{\"period\":\"2026-06\",\"people_count\":3,\"account_balance_cents\":5500,\"expenses\":[{\"label\":\"Rent\",\"category\":\"Housing\",\"is_variable\":false,\"amount_cents\":120000},{\"label\":\"Electricity\",\"category\":\"Utilities\",\"is_variable\":true,\"amount_cents\":8500}]}",
               )
               |> request.set_header("content-type", "application/json")
               |> request.set_header("origin", "http://localhost:1234")
@@ -335,7 +386,7 @@ pub fn household_contribution_history_archives_an_immutable_monthly_snapshot_tes
               )
             archive_response.status |> should.equal(201)
             let archived_json =
-              "{\"period\":\"2026-06\",\"people_count\":3,\"account_balance_cents\":5500,\"expenses_total_cents\":128500,\"balance_applied_cents\":5500,\"remaining_balance_cents\":0,\"contribution_total_cents\":123000,\"base_share_cents\":41000,\"residents_paying_one_extra_cent\":0,\"expenses\":[{\"label\":\"Rent\",\"amount_cents\":120000},{\"label\":\"Electricity\",\"amount_cents\":8500}]}"
+              "{\"period\":\"2026-06\",\"people_count\":3,\"account_balance_cents\":5500,\"expenses_total_cents\":128500,\"balance_applied_cents\":5500,\"remaining_balance_cents\":0,\"contribution_total_cents\":123000,\"base_share_cents\":41000,\"residents_paying_one_extra_cent\":0,\"expenses\":[{\"label\":\"Rent\",\"category\":\"Housing\",\"is_variable\":false,\"amount_cents\":120000},{\"label\":\"Electricity\",\"category\":\"Utilities\",\"is_variable\":true,\"amount_cents\":8500}]}"
             simulate.read_body(archive_response) |> should.equal(archived_json)
 
             let duplicate_response =
@@ -352,7 +403,9 @@ pub fn household_contribution_history_archives_an_immutable_monthly_snapshot_tes
             let update_request =
               simulate.request(http.Put, "/api/household")
               |> simulate.string_body(
-                "{\"people_count\":2,\"account_balance_cents\":0,\"expenses\":[{\"label\":\"Updated rent\",\"amount_cents\":140000}]}",
+                "{\"period\":\""
+                <> active_period
+                <> "\",\"people_count\":2,\"account_balance_cents\":0,\"expenses\":[{\"label\":\"Updated rent\",\"category\":\"Housing\",\"is_variable\":false,\"amount_cents\":140000}]}",
               )
               |> request.set_header("content-type", "application/json")
               |> request.set_header("origin", "http://localhost:1234")
@@ -370,7 +423,9 @@ pub fn household_contribution_history_archives_an_immutable_monthly_snapshot_tes
               )
             simulate.read_body(current_budget_response)
             |> should.equal(
-              "{\"people_count\":2,\"account_balance_cents\":0,\"expenses\":[{\"label\":\"Updated rent\",\"amount_cents\":140000}]}",
+              "{\"period\":\""
+              <> active_period
+              <> "\",\"people_count\":2,\"account_balance_cents\":0,\"expenses\":[{\"label\":\"Updated rent\",\"category\":\"Housing\",\"is_variable\":false,\"amount_cents\":140000}]}",
             )
 
             let history_response =
@@ -388,6 +443,107 @@ pub fn household_contribution_history_archives_an_immutable_monthly_snapshot_tes
         result
         |> should.equal(Error(pog.TransactionRolledBack(IntegrationRollback)))
       })
+  }
+}
+
+pub fn household_budget_advances_month_and_carries_its_plan_test() {
+  case env.required("CABANON_TEST_DATABASE_URL") {
+    Error(Nil) ->
+      io.println(
+        "Skipping PostgreSQL integration test: CABANON_TEST_DATABASE_URL is unset.",
+      )
+    Ok(database_url) ->
+      with_database(database_url, fn(database) {
+        let result =
+          pog.transaction(database, fn(transaction) {
+            let assert Ok(active) = household_persistence.load(transaction)
+            let household_persistence.HouseholdBudget(period, _, _, _) = active
+            let expenses = [
+              household_persistence.ExpenseLine(
+                "Rent",
+                "Housing",
+                False,
+                120_000,
+              ),
+              household_persistence.ExpenseLine(
+                "Groceries",
+                "Food",
+                True,
+                35_000,
+              ),
+            ]
+            let budget =
+              household_persistence.HouseholdBudget(
+                period:,
+                people_count: 2,
+                account_balance_cents: 10_000,
+                expenses:,
+              )
+
+            household_persistence.save(transaction, budget)
+            |> should.equal(Ok(Nil))
+
+            let next_period = next_calendar_month(period)
+            let assert Ok(next_budget) =
+              household_persistence.ensure_month(transaction, next_period)
+            next_budget
+            |> should.equal(household_persistence.HouseholdBudget(
+              period: next_period,
+              people_count: 2,
+              account_balance_cents: 0,
+              expenses:,
+            ))
+
+            let assert Ok([entry]) =
+              household_persistence.list_contribution_history(transaction)
+            let household_persistence.ContributionHistoryEntry(
+              archived_period,
+              _,
+              _,
+              archived_total,
+              _,
+              _,
+              _,
+              _,
+              _,
+              archived_expenses,
+            ) = entry
+            archived_period |> should.equal(period)
+            archived_total |> should.equal(155_000)
+            archived_expenses |> should.equal(expenses)
+
+            household_persistence.save(transaction, budget)
+            |> should.equal(Error(household_persistence.BudgetMonthMismatch))
+            household_persistence.ensure_month(transaction, next_period)
+            |> should.equal(Ok(next_budget))
+            household_persistence.ensure_month(transaction, period)
+            |> should.equal(Error(household_persistence.PastBudgetMonth))
+
+            Error(IntegrationRollback)
+          })
+
+        result
+        |> should.equal(Error(pog.TransactionRolledBack(IntegrationRollback)))
+      })
+  }
+}
+
+fn next_calendar_month(period: String) -> String {
+  case string.split(period, on: "-") {
+    [year, month] ->
+      case int.parse(year), int.parse(month) {
+        Ok(year_number), Ok(12) -> int.to_string(year_number + 1) <> "-01"
+        Ok(year_number), Ok(month_number) -> {
+          let next_month = int.to_string(month_number + 1)
+          let next_month = case month_number < 9 {
+            True -> "0" <> next_month
+            False -> next_month
+          }
+          int.to_string(year_number) <> "-" <> next_month
+        }
+        _, _ -> period
+      }
+    _ -> period
   }
 }
 

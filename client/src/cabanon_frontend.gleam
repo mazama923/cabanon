@@ -28,6 +28,7 @@ type Model {
   Model(
     demo: Bool,
     release_version: Option(String),
+    current_period: String,
     section: Section,
     people: String,
     balance: String,
@@ -73,7 +74,13 @@ type Model {
 }
 
 type ExpenseLine {
-  ExpenseLine(id: Int, label: String, amount: String)
+  ExpenseLine(
+    id: Int,
+    label: String,
+    category: String,
+    is_variable: Bool,
+    amount: String,
+  )
 }
 
 type CostRecord {
@@ -114,6 +121,8 @@ type Message {
   SaveContributionHistory
   ToggleContributionHistory(String)
   ChangeLabel(Int, String)
+  ChangeExpenseCategory(Int, String)
+  ChangeExpenseKind(Int, Bool)
   ChangeAmount(Int, String)
   ChangeCostDate(String)
   ChangeCostDescription(String)
@@ -157,6 +166,7 @@ type ConstructionData {
 
 type HouseholdData {
   HouseholdData(
+    period: String,
     people_count: Int,
     account_balance_cents: Int,
     expenses: List(StoredExpense),
@@ -164,7 +174,12 @@ type HouseholdData {
 }
 
 type StoredExpense {
-  StoredExpense(label: String, amount_cents: Int)
+  StoredExpense(
+    label: String,
+    category: String,
+    is_variable: Bool,
+    amount_cents: Int,
+  )
 }
 
 type ContributionHistoryEntry {
@@ -188,6 +203,18 @@ type CalculationProblem {
   InvalidBalance
 }
 
+const household_categories = [
+  "Housing",
+  "Utilities",
+  "Food",
+  "Transport",
+  "Insurance",
+  "Subscriptions",
+  "Health",
+  "Childcare",
+  "Other",
+]
+
 fn construction_api_url() -> String {
   api_url.base_url() <> "/api/construction"
 }
@@ -198,6 +225,10 @@ fn household_api_url() -> String {
 
 fn household_history_api_url() -> String {
   api_url.base_url() <> "/api/household/history"
+}
+
+fn household_month_api_url() -> String {
+  api_url.base_url() <> "/api/household/month"
 }
 
 fn release_version_url() -> String {
@@ -223,10 +254,19 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
     Model(
       demo:,
       release_version: None,
+      current_period: api_url.current_period(),
       section: HouseholdSection,
       people: "",
       balance: "",
-      expenses: [ExpenseLine(id: 1, label: "", amount: "")],
+      expenses: [
+        ExpenseLine(
+          id: 1,
+          label: "",
+          category: "Other",
+          is_variable: True,
+          amount: "",
+        ),
+      ],
       next_id: 2,
       construction_costs: [],
       construction_categories: [],
@@ -259,7 +299,7 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
       household_request_revision: None,
       household_save_due: False,
       contribution_history: [],
-      history_period: "",
+      history_period: api_url.current_period(),
       history_open_period: None,
       history_loading: True,
       history_saving: False,
@@ -276,19 +316,12 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
           }),
         )
       let load_household =
-        rsvp.get(
-          household_api_url(),
+        rsvp.post(
+          household_month_api_url(),
+          json.object([#("period", json.string(model.current_period))]),
           rsvp.expect_json(household_data_decoder(), fn(result) {
             HouseholdLoaded(result)
           }),
-        )
-      let load_history =
-        rsvp.get(
-          household_history_api_url(),
-          rsvp.expect_json(
-            decode.list(contribution_history_decoder()),
-            fn(result) { ContributionHistoryLoaded(result) },
-          ),
         )
       let load_release_version =
         rsvp.get(
@@ -302,7 +335,6 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
         effect.batch([
           load_construction,
           load_household,
-          load_history,
           load_release_version,
         ]),
       )
@@ -316,10 +348,34 @@ fn demo_model(model: Model) -> Model {
     people: "2",
     balance: "245.00",
     expenses: [
-      ExpenseLine(id: 1, label: "Rent", amount: "1200.00"),
-      ExpenseLine(id: 2, label: "Electricity", amount: "85.00"),
-      ExpenseLine(id: 3, label: "Groceries", amount: "425.00"),
-      ExpenseLine(id: 4, label: "Home insurance", amount: "168.00"),
+      ExpenseLine(
+        id: 1,
+        label: "Rent",
+        category: "Housing",
+        is_variable: False,
+        amount: "1200.00",
+      ),
+      ExpenseLine(
+        id: 2,
+        label: "Electricity",
+        category: "Utilities",
+        is_variable: True,
+        amount: "85.00",
+      ),
+      ExpenseLine(
+        id: 3,
+        label: "Groceries",
+        category: "Food",
+        is_variable: True,
+        amount: "425.00",
+      ),
+      ExpenseLine(
+        id: 4,
+        label: "Home insurance",
+        category: "Insurance",
+        is_variable: False,
+        amount: "168.00",
+      ),
     ],
     next_id: 5,
     construction_costs: [
@@ -372,7 +428,13 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
         Model(
           ..model,
           expenses: list.append(model.expenses, [
-            ExpenseLine(id: model.next_id, label: "", amount: ""),
+            ExpenseLine(
+              id: model.next_id,
+              label: "",
+              category: "Other",
+              is_variable: True,
+              amount: "",
+            ),
           ]),
           next_id: model.next_id + 1,
         ),
@@ -406,6 +468,24 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
           ..model,
           expenses: update_expense(model.expenses, id, fn(expense) {
             ExpenseLine(..expense, label: label)
+          }),
+        ),
+      )
+    ChangeExpenseCategory(id, category) ->
+      household_changed(
+        Model(
+          ..model,
+          expenses: update_expense(model.expenses, id, fn(expense) {
+            ExpenseLine(..expense, category: category)
+          }),
+        ),
+      )
+    ChangeExpenseKind(id, is_variable) ->
+      household_changed(
+        Model(
+          ..model,
+          expenses: update_expense(model.expenses, id, fn(expense) {
+            ExpenseLine(..expense, is_variable: is_variable)
           }),
         ),
       )
@@ -545,12 +625,18 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
         ),
       )
     HouseholdLoaded(Ok(data)) -> {
-      let HouseholdData(people_count, account_balance_cents, stored_expenses) =
-        data
+      let HouseholdData(
+        period,
+        people_count,
+        account_balance_cents,
+        stored_expenses,
+      ) = data
       let expenses = stored_expenses_to_lines(stored_expenses, 1)
-      no_effect(
+      let model =
         Model(
           ..model,
+          current_period: period,
+          history_period: period,
           people: display_people_count(people_count),
           balance: display_amount_input(account_balance_cents),
           expenses:,
@@ -560,8 +646,16 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
           household_revision: 0,
           household_request_revision: None,
           household_save_due: False,
-        ),
-      )
+        )
+      let load_history =
+        rsvp.get(
+          household_history_api_url(),
+          rsvp.expect_json(
+            decode.list(contribution_history_decoder()),
+            fn(result) { ContributionHistoryLoaded(result) },
+          ),
+        )
+      #(model, load_history)
     }
     HouseholdLoaded(Error(_)) ->
       no_effect(
@@ -569,6 +663,7 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
           ..model,
           household_status: BudgetUnavailable,
           household_ready: False,
+          history_loading: False,
         ),
       )
     ContributionHistoryLoaded(Ok(entries)) ->
@@ -623,7 +718,7 @@ fn save_contribution_history(model: Model) -> #(Model, Effect(Message)) {
 
 fn save_demo_contribution_history(model: Model) -> #(Model, Effect(Message)) {
   case household_data(model), calculate_plan(model) {
-    Ok(HouseholdData(people_count, account_balance_cents, expenses)),
+    Ok(HouseholdData(_, people_count, account_balance_cents, expenses)),
       Ok(household_budget.ContributionPlan(
         expenses_total_cents,
         balance_applied_cents,
@@ -732,12 +827,15 @@ fn contribution_archive_to_json(
   period: String,
   data: HouseholdData,
 ) -> json.Json {
-  let HouseholdData(people_count, account_balance_cents, expenses) = data
+  let HouseholdData(_, people_count, account_balance_cents, expenses) = data
   let expenses =
     list.map(expenses, fn(expense) {
-      let StoredExpense(label:, amount_cents:) = expense
+      let StoredExpense(label:, category:, is_variable:, amount_cents:) =
+        expense
       json.object([
         #("label", json.string(label)),
+        #("category", json.string(category)),
+        #("is_variable", json.bool(is_variable)),
         #("amount_cents", json.int(amount_cents)),
       ])
     })
@@ -956,7 +1054,12 @@ fn household_data(model: Model) -> Result(HouseholdData, Nil) {
           case stored_expenses_from_lines(model.expenses) {
             Error(Nil) -> Error(Nil)
             Ok(expenses) ->
-              Ok(HouseholdData(people_count:, account_balance_cents:, expenses:))
+              Ok(HouseholdData(
+                period: model.current_period,
+                people_count:,
+                account_balance_cents:,
+                expenses:,
+              ))
           }
       }
   }
@@ -967,46 +1070,62 @@ fn stored_expenses_from_lines(
 ) -> Result(List(StoredExpense), Nil) {
   case lines {
     [] -> Ok([])
-    [ExpenseLine(_, label, amount), ..rest] ->
+    [ExpenseLine(_, label, category, is_variable, amount), ..rest] ->
       case amount_cents(amount) {
         Error(Nil) -> Error(Nil)
         Ok(amount_cents) ->
           case stored_expenses_from_lines(rest) {
             Error(Nil) -> Error(Nil)
             Ok(stored_rest) ->
-              Ok([StoredExpense(label, amount_cents), ..stored_rest])
+              Ok([
+                StoredExpense(label, category, is_variable, amount_cents),
+                ..stored_rest
+              ])
           }
       }
   }
 }
 
 fn household_data_decoder() -> decode.Decoder(HouseholdData) {
+  use period <- decode.field("period", decode.string)
   use people_count <- decode.field("people_count", decode.int)
   use account_balance_cents <- decode.field("account_balance_cents", decode.int)
   use expenses <- decode.field(
     "expenses",
     decode.list(stored_expense_decoder()),
   )
-  decode.success(HouseholdData(people_count:, account_balance_cents:, expenses:))
+  decode.success(HouseholdData(
+    period:,
+    people_count:,
+    account_balance_cents:,
+    expenses:,
+  ))
 }
 
 fn stored_expense_decoder() -> decode.Decoder(StoredExpense) {
   use label <- decode.field("label", decode.string)
+  use category <- decode.field("category", decode.string)
+  use is_variable <- decode.field("is_variable", decode.bool)
   use amount_cents <- decode.field("amount_cents", decode.int)
-  decode.success(StoredExpense(label:, amount_cents:))
+  decode.success(StoredExpense(label:, category:, is_variable:, amount_cents:))
 }
 
 fn household_data_to_json(data: HouseholdData) -> json.Json {
-  let HouseholdData(people_count, account_balance_cents, expenses) = data
+  let HouseholdData(period, people_count, account_balance_cents, expenses) =
+    data
   let expenses =
     list.map(expenses, fn(expense) {
-      let StoredExpense(label:, amount_cents:) = expense
+      let StoredExpense(label:, category:, is_variable:, amount_cents:) =
+        expense
       json.object([
         #("label", json.string(label)),
+        #("category", json.string(category)),
+        #("is_variable", json.bool(is_variable)),
         #("amount_cents", json.int(amount_cents)),
       ])
     })
   json.object([
+    #("period", json.string(period)),
     #("people_count", json.int(people_count)),
     #("account_balance_cents", json.int(account_balance_cents)),
     #("expenses", json.array(from: expenses, of: fn(value) { value })),
@@ -1019,8 +1138,14 @@ fn stored_expenses_to_lines(
 ) -> List(ExpenseLine) {
   case expenses {
     [] -> []
-    [StoredExpense(label, amount_cents), ..rest] -> [
-      ExpenseLine(next_id, label, display_amount_input(amount_cents)),
+    [StoredExpense(label, category, is_variable, amount_cents), ..rest] -> [
+      ExpenseLine(
+        next_id,
+        label,
+        category,
+        is_variable,
+        display_amount_input(amount_cents),
+      ),
       ..stored_expenses_to_lines(rest, next_id + 1)
     ]
   }
@@ -1561,10 +1686,12 @@ fn view(model: Model) -> Element(Message) {
 
 fn view_household(model: Model) -> Element(Message) {
   let plan = calculate_plan(model)
-  let total_value = case total_cents(model) {
+  let monthly_total = total_cents(model)
+  let total_value = case monthly_total {
     Ok(total) -> format_money(total)
     Error(_) -> "—"
   }
+  let budget_change = budget_change_summary(model, monthly_total)
   let #(balance_note, balance_has_error) = balance_summary(model, plan)
   let balance_note_class = case balance_has_error {
     True -> "summary-note summary-note-error"
@@ -1611,7 +1738,7 @@ fn view_household(model: Model) -> Element(Message) {
     ]
     expenses ->
       list.map(expenses, fn(expense) {
-        view_expense(expense, household_controls_disabled)
+        view_expense(expense, monthly_total, household_controls_disabled)
       })
   }
 
@@ -1643,6 +1770,9 @@ fn view_household(model: Model) -> Element(Message) {
         html.p([class("summary-label")], [html.text("TOTAL EXPENSES")]),
         html.p([class("summary-value"), attribute("aria-live", "polite")], [
           html.text(total_value),
+        ]),
+        html.p([class("budget-change-note"), attribute("aria-live", "polite")], [
+          html.text(budget_change),
         ]),
         html.p([class("summary-note")], [
           html.text("Before using account funds"),
@@ -1676,6 +1806,9 @@ fn view_household(model: Model) -> Element(Message) {
           [class(balance_note_class), attribute("id", "account-balance-note")],
           [html.text(balance_note)],
         ),
+        html.p([class("field-hint")], [
+          html.text("Refresh this value after checking the shared account."),
+        ]),
       ]),
       html.div([class("summary-card")], [
         html.p([class("summary-label")], [html.text("CONTRIBUTIONS NEEDED")]),
@@ -1722,12 +1855,15 @@ fn view_household(model: Model) -> Element(Message) {
       html.div([class("panel-heading")], [
         html.div([], [
           html.p([class("eyebrow eyebrow-dark")], [html.text("YOUR BUDGET")]),
-          html.h2([], [html.text("Expense items")]),
+          html.h2([], [html.text("Plan for " <> model.current_period)]),
         ]),
         html.p([class("panel-hint")], [
-          html.text("Totals and shares update as you type."),
+          html.text(
+            "New months reuse the last plan. Review variable estimates and update the account balance; this is a forecast, not actual spending.",
+          ),
         ]),
       ]),
+      view_household_category_summary(model),
       html.div([class("expense-list")], expense_rows),
       html.div([class("expense-actions")], [
         html.button(
@@ -1803,13 +1939,13 @@ fn view_contribution_history(model: Model) -> Element(Message) {
     html.div([class("panel-heading")], [
       html.div([], [
         html.p([class("eyebrow eyebrow-dark")], [
-          html.text("MONTHLY RECORDS"),
+          html.text("SAVED MONTHS"),
         ]),
-        html.h2([], [html.text("Contribution history")]),
+        html.h2([], [html.text("Budget history")]),
       ]),
       html.p([class("panel-hint")], [
         html.text(
-          "Choose a month below to save a reviewed snapshot that autosave will not change.",
+          "The previous plan is archived when the next month starts. You can also save a reviewed contribution snapshot here.",
         ),
       ]),
     ]),
@@ -2099,13 +2235,21 @@ fn view_contribution_history_entry(
         ]
         lines ->
           list.map(lines, fn(expense) {
-            let StoredExpense(label, amount_cents) = expense
+            let StoredExpense(label, category, is_variable, amount_cents) =
+              expense
+            let kind = case is_variable {
+              True -> "Variable estimate"
+              False -> "Fixed"
+            }
             html.div([class("history-expense-row")], [
               html.span([], [
                 html.text(case string.trim(label) {
                   "" -> "Unlabelled expense"
                   label -> label
                 }),
+                html.span([class("history-expense-category")], [
+                  html.text(category <> " · " <> kind),
+                ]),
               ]),
               html.span([class("history-expense-amount")], [
                 html.text(format_money(amount_cents)),
@@ -2892,13 +3036,171 @@ fn view_category_form(model: Model) -> Element(Message) {
   ])
 }
 
+fn view_household_category_summary(model: Model) -> Element(Message) {
+  html.div([class("household-category-summary")], [
+    case total_cents(model) {
+      Error(Nil) ->
+        html.p([class("summary-note")], [
+          html.text("Category totals appear when every amount is valid."),
+        ])
+      Ok(total) -> {
+        let categories =
+          list.filter(household_categories, fn(category) {
+            category_total(model.expenses, category) > 0
+          })
+        case categories {
+          [] ->
+            html.p([class("summary-note")], [
+              html.text(
+                "Category totals will appear as you add planned amounts.",
+              ),
+            ])
+          categories ->
+            html.div(
+              [class("category-total-list")],
+              list.map(categories, fn(category) {
+                let amount = category_total(model.expenses, category)
+                html.div([class("category-total")], [
+                  html.p([class("category-total-name")], [html.text(category)]),
+                  html.p([class("category-total-value")], [
+                    html.text(format_money(amount)),
+                  ]),
+                  html.p([class("category-total-share")], [
+                    html.text(percentage_of_budget(amount, total) <> " of plan"),
+                  ]),
+                ])
+              }),
+            )
+        }
+      }
+    },
+  ])
+}
+
+fn category_total(expenses: List(ExpenseLine), category: String) -> Int {
+  case expenses {
+    [] -> 0
+    [expense, ..rest] -> {
+      let amount = case amount_cents(expense.amount) {
+        Ok(amount) if expense.category == category -> amount
+        _ -> 0
+      }
+      amount + category_total(rest, category)
+    }
+  }
+}
+
+fn budget_change_summary(
+  model: Model,
+  current_total: Result(Int, Nil),
+) -> String {
+  case model.history_loading {
+    True -> "Loading comparison with the previous month..."
+    False ->
+      case previous_calendar_month(model.current_period) {
+        None -> "Previous-month comparison is unavailable."
+        Some(previous_period) ->
+          case
+            history_total_for_period(
+              model.contribution_history,
+              previous_period,
+            )
+          {
+            None ->
+              "No saved plan for "
+              <> previous_period
+              <> "; comparison unavailable."
+            Some(0) ->
+              "Comparison unavailable: the previous month's total was €0.00."
+            Some(previous_total) ->
+              case current_total {
+                Error(Nil) ->
+                  "Correct expense amounts to compare with "
+                  <> previous_period
+                  <> "."
+                Ok(total) ->
+                  signed_money(total - previous_total)
+                  <> " ("
+                  <> signed_percentage_change(total, previous_total)
+                  <> ") vs "
+                  <> previous_period
+              }
+          }
+      }
+  }
+}
+
+fn previous_calendar_month(period: String) -> Option(String) {
+  case string.split(period, on: "-") {
+    [year, month] ->
+      case int.parse(year), int.parse(month) {
+        Ok(year_number), Ok(1) if year_number > 1 ->
+          Some(int.to_string(year_number - 1) <> "-12")
+        Ok(year_number), Ok(month_number)
+          if year_number > 0 && month_number > 1 && month_number <= 12
+        -> {
+          let month = case month_number - 1 < 10 {
+            True -> "0" <> int.to_string(month_number - 1)
+            False -> int.to_string(month_number - 1)
+          }
+          Some(year <> "-" <> month)
+        }
+        _, _ -> None
+      }
+    _ -> None
+  }
+}
+
+fn history_total_for_period(
+  entries: List(ContributionHistoryEntry),
+  period: String,
+) -> Option(Int) {
+  case entries {
+    [] -> None
+    [
+      ContributionHistoryEntry(saved_period, _, _, total, _, _, _, _, _, _),
+      ..rest
+    ] ->
+      case saved_period == period {
+        True -> Some(total)
+        False -> history_total_for_period(rest, period)
+      }
+  }
+}
+
+fn percentage_of_budget(amount: Int, total: Int) -> String {
+  let tenths = amount * 1000 / total
+  int.to_string(tenths / 10) <> "." <> int.to_string(tenths % 10) <> "%"
+}
+
+fn signed_percentage_change(current: Int, previous: Int) -> String {
+  let change = current - previous
+  let sign = case change > 0 {
+    True -> "+"
+    False ->
+      case change < 0 {
+        True -> "−"
+        False -> ""
+      }
+  }
+  let magnitude = case change < 0 {
+    True -> 0 - change
+    False -> change
+  }
+  let tenths = magnitude * 1000 / previous
+  sign <> int.to_string(tenths / 10) <> "." <> int.to_string(tenths % 10) <> "%"
+}
+
 fn view_expense(
   expense: ExpenseLine,
+  monthly_total: Result(Int, Nil),
   controls_disabled: Bool,
 ) -> Element(Message) {
   let id = int.to_string(expense.id)
   let label_id = "expense-label-" <> id
   let amount_id = "expense-amount-" <> id
+  let category_id = "expense-category-" <> id
+  let kind_id = "expense-kind-" <> id
   let amount_is_invalid = case amount_cents(expense.amount) {
     Ok(_) -> False
     Error(_) -> True
@@ -2918,6 +3220,15 @@ fn view_expense(
   let amount_help = case amount_is_invalid {
     True -> "Enter a non-negative amount with up to two decimal places."
     False -> "e.g. 850.00"
+  }
+  let share_note = case monthly_total, amount_cents(expense.amount) {
+    Ok(total), Ok(amount) if total > 0 ->
+      percentage_of_budget(amount, total) <> " of planned expenses"
+    _, _ -> "Share unavailable until the total is greater than €0.00."
+  }
+  let kind = case expense.is_variable {
+    True -> "variable"
+    False -> "fixed"
   }
 
   html.div([class("expense-row")], [
@@ -2958,6 +3269,7 @@ fn view_expense(
       html.p([class(amount_help_class), attribute("id", amount_id <> "-help")], [
         html.text(amount_help),
       ]),
+      html.p([class("expense-share")], [html.text(share_note)]),
     ]),
     html.button(
       [
@@ -2969,6 +3281,47 @@ fn view_expense(
       ],
       [html.text("Remove")],
     ),
+    html.div([class("expense-meta")], [
+      html.div([class("field")], [
+        html.label([class("field-label"), attribute("for", category_id)], [
+          html.text("Category"),
+        ]),
+        html.select(
+          [
+            class("text-input"),
+            attribute("id", category_id),
+            value(expense.category),
+            disabled(controls_disabled),
+            event.on_change(fn(category) {
+              ChangeExpenseCategory(expense.id, category)
+            }),
+          ],
+          list.map(household_categories, fn(category) {
+            html.option([attribute("value", category)], category)
+          }),
+        ),
+      ]),
+      html.div([class("field")], [
+        html.label([class("field-label"), attribute("for", kind_id)], [
+          html.text("Expense type"),
+        ]),
+        html.select(
+          [
+            class("text-input"),
+            attribute("id", kind_id),
+            value(kind),
+            disabled(controls_disabled),
+            event.on_change(fn(value) {
+              ChangeExpenseKind(expense.id, value == "variable")
+            }),
+          ],
+          [
+            html.option([attribute("value", "fixed")], "Fixed"),
+            html.option([attribute("value", "variable")], "Variable estimate"),
+          ],
+        ),
+      ]),
+    ]),
   ])
 }
 
