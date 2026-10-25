@@ -254,7 +254,7 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
     Model(
       demo:,
       release_version: None,
-      current_period: api_url.current_period(),
+      current_period: api_url.planning_period(),
       section: HouseholdSection,
       people: "",
       balance: "",
@@ -299,7 +299,7 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
       household_request_revision: None,
       household_save_due: False,
       contribution_history: [],
-      history_period: api_url.current_period(),
+      history_period: api_url.planning_period(),
       history_open_period: None,
       history_loading: True,
       history_saving: False,
