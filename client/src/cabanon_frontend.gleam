@@ -11,7 +11,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre
 import lustre/attribute.{
-  attribute, class, disabled, min, placeholder, step, type_, value,
+  attribute, class, disabled, min, placeholder, selected, step, type_, value,
 }
 import lustre/effect.{type Effect}
 import lustre/element.{type Element}
@@ -2589,7 +2589,6 @@ fn view_construction(model: Model) -> Element(Message) {
             [
               class("text-input"),
               attribute("id", "cost-category"),
-              value(model.selected_category),
               disabled(
                 model.construction_loading
                 || model.construction_categories == [],
@@ -2597,7 +2596,13 @@ fn view_construction(model: Model) -> Element(Message) {
               event.on_change(ChangeCostCategory),
             ],
             list.map(model.construction_categories, fn(category) {
-              html.option([attribute("value", category)], category)
+              html.option(
+                [
+                  attribute("value", category),
+                  selected(category == model.selected_category),
+                ],
+                category,
+              )
             }),
           ),
         ]),
@@ -2791,7 +2796,13 @@ fn view_cost_correction_form(model: Model, id: String) -> Element(Message) {
   }
   let category_options =
     list.map(model.construction_categories, fn(category) {
-      html.option([attribute("value", category)], category)
+      html.option(
+        [
+          attribute("value", category),
+          selected(category == model.correction_category),
+        ],
+        category,
+      )
     })
   html.div([class("cost-correction-form")], [
     html.div([class("correction-form-heading")], [
@@ -2846,7 +2857,6 @@ fn view_cost_correction_form(model: Model, id: String) -> Element(Message) {
           [
             class("text-input"),
             attribute("id", "correction-category-" <> id),
-            value(model.correction_category),
             disabled(model.correction_saving),
             event.on_change(ChangeCorrectionCategory),
           ],
@@ -3226,10 +3236,6 @@ fn view_expense(
       percentage_of_budget(amount, total) <> " of planned expenses"
     _, _ -> "Share unavailable until the total is greater than €0.00."
   }
-  let kind = case expense.is_variable {
-    True -> "variable"
-    False -> "fixed"
-  }
 
   html.div([class("expense-row")], [
     html.div([class("field")], [
@@ -3290,14 +3296,19 @@ fn view_expense(
           [
             class("text-input"),
             attribute("id", category_id),
-            value(expense.category),
             disabled(controls_disabled),
             event.on_change(fn(category) {
               ChangeExpenseCategory(expense.id, category)
             }),
           ],
           list.map(household_categories, fn(category) {
-            html.option([attribute("value", category)], category)
+            html.option(
+              [
+                attribute("value", category),
+                selected(category == expense.category),
+              ],
+              category,
+            )
           }),
         ),
       ]),
@@ -3309,15 +3320,20 @@ fn view_expense(
           [
             class("text-input"),
             attribute("id", kind_id),
-            value(kind),
             disabled(controls_disabled),
             event.on_change(fn(value) {
               ChangeExpenseKind(expense.id, value == "variable")
             }),
           ],
           [
-            html.option([attribute("value", "fixed")], "Fixed"),
-            html.option([attribute("value", "variable")], "Variable estimate"),
+            html.option(
+              [attribute("value", "fixed"), selected(!expense.is_variable)],
+              "Fixed",
+            ),
+            html.option(
+              [attribute("value", "variable"), selected(expense.is_variable)],
+              "Variable estimate",
+            ),
           ],
         ),
       ]),
