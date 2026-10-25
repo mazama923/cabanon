@@ -811,6 +811,11 @@ select {
   text-align: center;
 }
 
+.version-label {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+}
+
 .add-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;

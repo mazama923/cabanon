@@ -111,6 +111,14 @@ cat >"${bundle_dir}/manifest.json" <<MANIFEST
 }
 MANIFEST
 
+cat >"${bundle_dir}/frontend/version.json" <<VERSION
+{
+  "release_version": "${release_version}",
+  "git_commit": "${git_commit}",
+  "built_at_utc": "${built_at_utc}"
+}
+VERSION
+
 (
   cd "${bundle_dir}"
   find . -type f ! -name checksums.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > checksums.sha256

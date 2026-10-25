@@ -27,6 +27,7 @@ type Section {
 type Model {
   Model(
     demo: Bool,
+    release_version: Option(String),
     section: Section,
     people: String,
     balance: String,
@@ -147,6 +148,7 @@ type Message {
   ContributionHistorySaved(Result(ContributionHistoryEntry, rsvp.Error(String)))
   HouseholdSaveReady(Int)
   HouseholdSaved(Int, Result(HouseholdData, rsvp.Error(String)))
+  ReleaseVersionLoaded(Result(String, rsvp.Error(String)))
 }
 
 type ConstructionData {
@@ -198,6 +200,10 @@ fn household_history_api_url() -> String {
   api_url.base_url() <> "/api/household/history"
 }
 
+fn release_version_url() -> String {
+  api_url.base_url() <> "/version.json"
+}
+
 pub fn main() {
   start(False)
 }
@@ -216,6 +222,7 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
   let model =
     Model(
       demo:,
+      release_version: None,
       section: HouseholdSection,
       people: "",
       balance: "",
@@ -283,7 +290,22 @@ fn init(demo: Bool) -> #(Model, Effect(Message)) {
             fn(result) { ContributionHistoryLoaded(result) },
           ),
         )
-      #(model, effect.batch([load_construction, load_household, load_history]))
+      let load_release_version =
+        rsvp.get(
+          release_version_url(),
+          rsvp.expect_json(release_version_decoder(), fn(result) {
+            ReleaseVersionLoaded(result)
+          }),
+        )
+      #(
+        model,
+        effect.batch([
+          load_construction,
+          load_household,
+          load_history,
+          load_release_version,
+        ]),
+      )
     }
   }
 }
@@ -450,6 +472,9 @@ fn update(model: Model, message: Message) -> #(Model, Effect(Message)) {
     SaveCategory -> save_category(model)
     CancelCategoryForm ->
       no_effect(Model(..model, category_form_open: False, new_category: ""))
+    ReleaseVersionLoaded(Ok(version)) ->
+      no_effect(Model(..model, release_version: Some(version)))
+    ReleaseVersionLoaded(Error(_)) -> no_effect(model)
     ConstructionLoaded(Ok(data)) -> {
       let ConstructionData(categories:, costs:) = data
       let selected_category = case
@@ -1510,6 +1535,23 @@ fn update_expense(
   })
 }
 
+fn release_version_decoder() -> decode.Decoder(String) {
+  use version <- decode.field("release_version", decode.string)
+  decode.success(version)
+}
+
+fn view_release_version(model: Model) -> Element(Message) {
+  case model.release_version {
+    Some(version) ->
+      html.p([class("version-label")], [html.text("Version " <> version)])
+    None ->
+      case model.demo {
+        True -> html.p([class("version-label")], [html.text("Demo build")])
+        False -> html.text("")
+      }
+  }
+}
+
 fn view(model: Model) -> Element(Message) {
   case model.section {
     HouseholdSection -> view_household(model)
@@ -1713,6 +1755,7 @@ fn view_household(model: Model) -> Element(Message) {
     view_contribution_history(model),
     html.footer([class("page-footer")], [
       html.text("A shared budget everyone can understand."),
+      view_release_version(model),
     ]),
   ])
 }
@@ -2508,6 +2551,7 @@ fn view_construction(model: Model) -> Element(Message) {
     ]),
     html.footer([class("page-footer")], [
       html.text("A clear picture of what your home really costs."),
+      view_release_version(model),
     ]),
   ])
 }
