@@ -119,6 +119,19 @@ pub fn production_frontend_serves_the_index_and_static_assets_test() {
   asset_response.status |> should.equal(200)
   simulate.read_body(asset_response)
   |> should.equal("console.log(\"cabanon test frontend\");\n")
+
+  let version_response =
+    router.handle_request_with_database_and_origin_and_static(
+      simulate.request(http.Get, "/version.json"),
+      None,
+      "https://cabanon.example.test",
+      Some("test/fixtures/frontend"),
+    )
+  version_response.status |> should.equal(200)
+  simulate.read_body(version_response)
+  |> should.equal("{\"release_version\":\"v1.2.3\"}\n")
+  http_response.get_header(version_response, "cache-control")
+  |> should.equal(Ok("no-store"))
 }
 
 pub fn production_frontend_does_not_intercept_backend_routes_test() {

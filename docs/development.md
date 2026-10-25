@@ -25,7 +25,7 @@ The Lustre frontend is a separate Gleam package in `client/`, compiled for JavaS
 mise run frontend:run
 ```
 
-The Lustre development server is available at `http://localhost:1234` and watches `client/src/` and `client/assets/`. The household calculator remains in the browser; the current budget autosaves, while monthly contribution snapshots are recorded only when you explicitly choose a month and select **Save this month**. Archived months cannot be replaced and retain their expense details and calculation results. The history panel compares each period's expenses, balance used, contributions, and base share per person with the closest earlier archived month. The construction screen loads its history and categories from the Erlang API and saves new entries to PostgreSQL. The JavaScript client and Erlang server both use the pure domain package in `shared/`.
+The Lustre development server is available at `http://localhost:1234` and watches `client/src/` and `client/assets/`. The household plan autosaves; when a browser opens a later calendar month, the server archives the previous plan, carries its expense lines forward, and resets the shared-account balance for review. The current month can also be archived manually. History snapshots retain their expense details and contribution calculation results. The household view shows forecast totals, per-expense and category shares, and the change from the previous calendar month's plan when available. The construction screen loads its history and categories from the Erlang API and saves new entries to PostgreSQL. The JavaScript client and Erlang server both use the pure domain package in `shared/`.
 
 Run `mise run frontend:check` to format-check, type-check, and build the production browser bundle. The first build downloads Bun through Lustre Dev Tools if it is not already available.
 
@@ -33,7 +33,7 @@ Run `mise run frontend:check` to format-check, type-check, and build the product
 
 ## Local database
 
-PostgreSQL 13 or newer is installed as a native operating-system service, not through Docker or Compose. Migration `0001` creates one `My Home` project and the construction history tables. Migration `0002` adds the single-household budget snapshot used by automatic household saving. Migration `0003` adds an audit history for corrected construction costs. Migration `0004` adds immutable monthly household contribution snapshots.
+PostgreSQL 13 or newer is installed as a native operating-system service, not through Docker or Compose. Migration `0001` creates one `My Home` project and the construction history tables. Migration `0002` adds the single-household budget snapshot used by automatic household saving. Migration `0003` adds an audit history for corrected construction costs. Migration `0004` adds immutable monthly household contribution snapshots. Migration `0005` adds the active budget month and household expense categories and fixed/variable flags; old expense lines default to `Other` and variable for review.
 
 For local development, install PostgreSQL with the operating-system package manager, start the service, and create separate application and disposable integration-test databases. Run the migration as the owner of each database so that role can access the tables:
 
@@ -44,10 +44,12 @@ psql --host=127.0.0.1 --username=cabanon_dev --dbname=cabanon_dev \
   --set=ON_ERROR_STOP=1 --file=priv/migrations/0001_construction_cost_history.sql
 psql --host=127.0.0.1 --username=cabanon_dev --dbname=cabanon_dev \
   --set=ON_ERROR_STOP=1 --file=priv/migrations/0002_household_budget.sql
-psql --host=127.0.0.1 --username=cabanon_dev --dbname=cabanon_dev \\
+psql --host=127.0.0.1 --username=cabanon_dev --dbname=cabanon_dev \
   --set=ON_ERROR_STOP=1 --file=priv/migrations/0003_construction_cost_corrections.sql
-psql --host=127.0.0.1 --username=cabanon_dev --dbname=cabanon_dev \\
+psql --host=127.0.0.1 --username=cabanon_dev --dbname=cabanon_dev \
   --set=ON_ERROR_STOP=1 --file=priv/migrations/0004_household_contribution_history.sql
+psql --host=127.0.0.1 --username=cabanon_dev --dbname=cabanon_dev \
+  --set=ON_ERROR_STOP=1 --file=priv/migrations/0005_household_monthly_budget.sql
 
 createuser --pwprompt cabanon_test
 createdb --owner=cabanon_test cabanon_test
@@ -55,10 +57,12 @@ psql --host=127.0.0.1 --username=cabanon_test --dbname=cabanon_test \
   --set=ON_ERROR_STOP=1 --file=priv/migrations/0001_construction_cost_history.sql
 psql --host=127.0.0.1 --username=cabanon_test --dbname=cabanon_test \
   --set=ON_ERROR_STOP=1 --file=priv/migrations/0002_household_budget.sql
-psql --host=127.0.0.1 --username=cabanon_test --dbname=cabanon_test \\
+psql --host=127.0.0.1 --username=cabanon_test --dbname=cabanon_test \
   --set=ON_ERROR_STOP=1 --file=priv/migrations/0003_construction_cost_corrections.sql
-psql --host=127.0.0.1 --username=cabanon_test --dbname=cabanon_test \\
+psql --host=127.0.0.1 --username=cabanon_test --dbname=cabanon_test \
   --set=ON_ERROR_STOP=1 --file=priv/migrations/0004_household_contribution_history.sql
+psql --host=127.0.0.1 --username=cabanon_test --dbname=cabanon_test \
+  --set=ON_ERROR_STOP=1 --file=priv/migrations/0005_household_monthly_budget.sql
 ```
 
 Each migration command prompts for the role's password. If earlier migrations were already applied, run only the unapplied migrations in order. Run migrations as the database/schema owner when possible. If an existing schema is owned by a different role, the migration role needs `CREATE` on the schema and `SELECT` and `INSERT` on `schema_migrations`; migration `0003` also requires `REFERENCES` on `construction_costs` and `construction_categories`. Use a URL-encoded password in the PostgreSQL connection URL if it contains reserved URL characters. Set the server environment and launch both processes together:
@@ -69,7 +73,7 @@ export CABANON_DATABASE_URL='postgresql://cabanon_dev:URL_ENCODED_PASSWORD@127.0
 mise run dev
 ```
 
-`mise run dev` starts the Erlang backend and the Lustre frontend in parallel. Open `http://localhost:1234`; press `Ctrl-C` to stop both. Development defaults to `127.0.0.1:8080` and permits only `http://localhost:1234` as the browser origin. If `CABANON_DATABASE_URL` is unset or invalid, development still starts but database-backed API requests and `/readyz` return `503`. Household changes are saved automatically after about 450 ms without typing; the page shows whether the budget is loading, saving, saved, invalid, or unavailable. Monthly history is a separate manual action and never runs as part of this autosave.
+`mise run dev` starts the Erlang backend and the Lustre frontend in parallel. Open `http://localhost:1234`; press `Ctrl-C` to stop both. Development defaults to `127.0.0.1:8080` and permits only `http://localhost:1234` as the browser origin. If `CABANON_DATABASE_URL` is unset or invalid, development still starts but database-backed API requests and `/readyz` return `503`. Household changes are saved automatically after about 450 ms without typing; the page shows whether the budget is loading, saving, saved, invalid, or unavailable. Month rollover is a separate initialization request, not part of autosave: it archives the previous plan and resets the balance before the client loads the active month. A reviewed contribution snapshot can also be saved manually.
 
 Run the repository integration tests against the separate test database. They use transactions and roll back their writes; never point the test URL at production or a database containing data you need to keep.
 

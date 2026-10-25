@@ -23,6 +23,20 @@ pub fn handle(
   api_response.with_headers(response, request, allowed_origin)
 }
 
+pub fn initialize_month(
+  request: wisp.Request,
+  database: pog.Connection,
+  allowed_origin: String,
+) -> wisp.Response {
+  let response = case request.method {
+    http.Options -> wisp.response(204)
+    http.Post -> initialize_requested_month(request, database)
+    _ -> wisp.method_not_allowed(allowed: [http.Post, http.Options])
+  }
+
+  api_response.with_headers(response, request, allowed_origin)
+}
+
 pub fn handle_history(
   request: wisp.Request,
   database: pog.Connection,
@@ -46,6 +60,29 @@ pub fn unavailable(
     _ -> json_error(503, "The household database is unavailable.")
   }
   api_response.with_headers(response, request, allowed_origin)
+}
+
+fn initialize_requested_month(
+  request: wisp.Request,
+  database: pog.Connection,
+) -> wisp.Response {
+  case json_request_body(request) {
+    Error(response) -> response
+    Ok(body) ->
+      case json.parse(body, month_decoder()) {
+        Error(_) -> json_error(400, "Invalid household budget month.")
+        Ok(period) ->
+          case persistence.ensure_month(database, period) {
+            Ok(budget) -> respond_json(200, budget_to_json(budget))
+            Error(error) -> storage_error(error)
+          }
+      }
+  }
+}
+
+fn month_decoder() -> decode.Decoder(String) {
+  use period <- decode.field("period", decode.string)
+  decode.success(period)
 }
 
 fn load_history(database: pog.Connection) -> wisp.Response {
@@ -87,6 +124,7 @@ fn contribution_archive_decoder() -> decode.Decoder(
   decode.success(#(
     period,
     persistence.HouseholdBudget(
+      period:,
       people_count:,
       account_balance_cents:,
       expenses:,
@@ -170,10 +208,12 @@ fn json_request_body(request: wisp.Request) -> Result(String, wisp.Response) {
 }
 
 fn household_budget_decoder() -> decode.Decoder(persistence.HouseholdBudget) {
+  use period <- decode.field("period", decode.string)
   use people_count <- decode.field("people_count", decode.int)
   use account_balance_cents <- decode.field("account_balance_cents", decode.int)
   use expenses <- decode.field("expenses", decode.list(expense_decoder()))
   decode.success(persistence.HouseholdBudget(
+    period:,
     people_count:,
     account_balance_cents:,
     expenses:,
@@ -182,17 +222,26 @@ fn household_budget_decoder() -> decode.Decoder(persistence.HouseholdBudget) {
 
 fn expense_decoder() -> decode.Decoder(persistence.ExpenseLine) {
   use label <- decode.field("label", decode.string)
+  use category <- decode.field("category", decode.string)
+  use is_variable <- decode.field("is_variable", decode.bool)
   use amount_cents <- decode.field("amount_cents", decode.int)
-  decode.success(persistence.ExpenseLine(label:, amount_cents:))
+  decode.success(persistence.ExpenseLine(
+    label:,
+    category:,
+    is_variable:,
+    amount_cents:,
+  ))
 }
 
 fn budget_to_json(budget: persistence.HouseholdBudget) -> json.Json {
   let persistence.HouseholdBudget(
+    period:,
     people_count:,
     account_balance_cents:,
     expenses:,
   ) = budget
   json.object([
+    #("period", json.string(period)),
     #("people_count", json.int(people_count)),
     #("account_balance_cents", json.int(account_balance_cents)),
     #("expenses", json.array(from: expenses, of: expense_to_json)),
@@ -200,9 +249,12 @@ fn budget_to_json(budget: persistence.HouseholdBudget) -> json.Json {
 }
 
 fn expense_to_json(expense: persistence.ExpenseLine) -> json.Json {
-  let persistence.ExpenseLine(label:, amount_cents:) = expense
+  let persistence.ExpenseLine(label:, category:, is_variable:, amount_cents:) =
+    expense
   json.object([
     #("label", json.string(label)),
+    #("category", json.string(category)),
+    #("is_variable", json.bool(is_variable)),
     #("amount_cents", json.int(amount_cents)),
   ])
 }
@@ -224,6 +276,7 @@ fn history_storage_error(error: persistence.StorageError) -> wisp.Response {
       json_error(400, "Household size must be at least one person.")
     persistence.NegativeBalance
     | persistence.NegativeExpense
+    | persistence.MissingExpenseCategory
     | persistence.InvalidHistoryCalculation(_) ->
       json_error(400, "The household contribution data is invalid.")
     persistence.DuplicateHistoryPeriod ->
@@ -231,6 +284,8 @@ fn history_storage_error(error: persistence.StorageError) -> wisp.Response {
         409,
         "A contribution history entry already exists for this month.",
       )
+    persistence.PastBudgetMonth | persistence.BudgetMonthMismatch ->
+      json_error(409, "The household budget month is no longer active.")
     persistence.MissingBudget
     | persistence.UnexpectedResultCount
     | persistence.DatabaseError(_) ->
@@ -246,8 +301,15 @@ fn storage_error(error: persistence.StorageError) -> wisp.Response {
       json_error(400, "Account balance must not be negative.")
     persistence.NegativeExpense ->
       json_error(400, "Expense amounts must not be negative.")
-    persistence.InvalidHistoryPeriod
-    | persistence.InvalidHistoryPeopleCount
+    persistence.MissingExpenseCategory ->
+      json_error(400, "Every household expense needs a category.")
+    persistence.PastBudgetMonth ->
+      json_error(409, "Cannot move the active budget to a past month.")
+    persistence.BudgetMonthMismatch ->
+      json_error(409, "The household budget month has changed. Reload it.")
+    persistence.InvalidHistoryPeriod ->
+      json_error(400, "Period must be a valid month in YYYY-MM format.")
+    persistence.InvalidHistoryPeopleCount
     | persistence.DuplicateHistoryPeriod
     | persistence.InvalidHistoryCalculation(_)
     | persistence.MissingBudget

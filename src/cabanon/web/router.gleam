@@ -1,3 +1,4 @@
+import cabanon/web/api_response
 import cabanon/web/construction_api
 import cabanon/web/household_api
 import gleam/http
@@ -49,10 +50,18 @@ pub fn handle_request_with_database_and_origin_and_static(
         ["healthz", ..] -> wisp.not_found()
         ["readyz"] -> readyz(request, database)
         ["readyz", ..] -> wisp.not_found()
+        ["version.json"] ->
+          serve_version(request, frontend_directory, allowed_origin)
         ["api", "household", "history"] ->
           case database {
             Some(database) ->
               household_api.handle_history(request, database, allowed_origin)
+            None -> household_api.unavailable(request, allowed_origin)
+          }
+        ["api", "household", "month"] ->
+          case database {
+            Some(database) ->
+              household_api.initialize_month(request, database, allowed_origin)
             None -> household_api.unavailable(request, allowed_origin)
           }
         ["api", "household"] ->
@@ -92,6 +101,22 @@ fn serve_frontend(
           })
       }
   }
+}
+
+fn serve_version(
+  request: wisp.Request,
+  frontend_directory: Option(String),
+  allowed_origin: String,
+) -> wisp.Response {
+  let response = case frontend_directory {
+    None -> wisp.not_found()
+    Some(directory) ->
+      wisp.serve_static(request, under: "/", from: directory, next: fn() {
+        wisp.not_found()
+      })
+  }
+
+  api_response.with_headers(response, request, allowed_origin)
 }
 
 fn serve_frontend_index(

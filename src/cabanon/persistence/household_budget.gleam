@@ -10,6 +10,7 @@ const household_budget_id = "00000000-0000-4000-8000-000000000002"
 
 pub type HouseholdBudget {
   HouseholdBudget(
+    period: String,
     people_count: Int,
     account_balance_cents: Int,
     expenses: List(ExpenseLine),
@@ -17,7 +18,12 @@ pub type HouseholdBudget {
 }
 
 pub type ExpenseLine {
-  ExpenseLine(label: String, amount_cents: Int)
+  ExpenseLine(
+    label: String,
+    category: String,
+    is_variable: Bool,
+    amount_cents: Int,
+  )
 }
 
 pub type ContributionHistoryEntry {
@@ -53,6 +59,9 @@ pub type StorageError {
   InvalidPeopleCount
   NegativeBalance
   NegativeExpense
+  MissingExpenseCategory
+  PastBudgetMonth
+  BudgetMonthMismatch
   MissingBudget
   InvalidHistoryPeriod
   InvalidHistoryPeopleCount
@@ -65,7 +74,8 @@ pub type StorageError {
 pub fn load(database: pog.Connection) -> Result(HouseholdBudget, StorageError) {
   let state_query =
     pog.query(
-      "SELECT people_count, account_balance_cents, expense_count "
+      "SELECT to_char(period, 'YYYY-MM'), people_count, "
+      <> "account_balance_cents, expense_count "
       <> "FROM household_budget_state WHERE id = $1::uuid",
     )
     |> pog.parameter(pog.text(household_budget_id))
@@ -75,10 +85,11 @@ pub fn load(database: pog.Connection) -> Result(HouseholdBudget, StorageError) {
     Error(error) -> Error(DatabaseError(error))
     Ok(returned) ->
       case returned.rows {
-        [#(people_count, account_balance_cents, expense_count)] ->
+        [#(period, people_count, account_balance_cents, expense_count)] ->
           case list_expenses(database, expense_count) {
             Ok(expenses) ->
               Ok(HouseholdBudget(
+                period:,
                 people_count:,
                 account_balance_cents:,
                 expenses:,
@@ -88,6 +99,97 @@ pub fn load(database: pog.Connection) -> Result(HouseholdBudget, StorageError) {
         [] -> Error(MissingBudget)
         _ -> Error(UnexpectedResultCount)
       }
+  }
+}
+
+pub fn ensure_month(
+  database: pog.Connection,
+  period: String,
+) -> Result(HouseholdBudget, StorageError) {
+  case valid_period(period) {
+    False -> Error(InvalidHistoryPeriod)
+    True ->
+      case load(database) {
+        Error(error) -> Error(error)
+        Ok(current) ->
+          case current.period == period {
+            True -> Ok(current)
+            False ->
+              case period_is_after(period, current.period) {
+                False -> Error(PastBudgetMonth)
+                True -> advance_month(database, current, period)
+              }
+          }
+      }
+  }
+}
+
+fn advance_month(
+  database: pog.Connection,
+  current: HouseholdBudget,
+  next_period: String,
+) -> Result(HouseholdBudget, StorageError) {
+  case archive_before_transition(database, current) {
+    Error(error) -> Error(error)
+    Ok(Nil) -> {
+      let query =
+        pog.query(
+          "UPDATE household_budget_state SET period = ($1::text || '-01')::date, "
+          <> "account_balance_cents = 0, updated_at = now() "
+          <> "WHERE id = $2::uuid AND period = ($3::text || '-01')::date "
+          <> "RETURNING to_char(period, 'YYYY-MM')",
+        )
+        |> pog.parameter(pog.text(next_period))
+        |> pog.parameter(pog.text(household_budget_id))
+        |> pog.parameter(pog.text(current.period))
+        |> pog.returning(decode.at([0], decode.string))
+
+      case pog.execute(query, on: database) {
+        Error(error) -> Error(DatabaseError(error))
+        Ok(returned) ->
+          case returned.rows {
+            [updated_period] if updated_period == next_period -> load(database)
+            [] -> ensure_month(database, next_period)
+            _ -> Error(UnexpectedResultCount)
+          }
+      }
+    }
+  }
+}
+
+fn archive_before_transition(
+  database: pog.Connection,
+  budget: HouseholdBudget,
+) -> Result(Nil, StorageError) {
+  case budget.people_count == 0 {
+    True -> Ok(Nil)
+    False ->
+      case archive_contributions(database, budget.period, budget) {
+        Ok(_) | Error(DuplicateHistoryPeriod) -> Ok(Nil)
+        Error(error) -> Error(error)
+      }
+  }
+}
+
+fn period_is_after(candidate: String, current: String) -> Bool {
+  case string.split(candidate, on: "-"), string.split(current, on: "-") {
+    [candidate_year, candidate_month], [current_year, current_month] ->
+      case
+        int.parse(candidate_year),
+        int.parse(candidate_month),
+        int.parse(current_year),
+        int.parse(current_month)
+      {
+        Ok(candidate_year),
+          Ok(candidate_month),
+          Ok(current_year),
+          Ok(current_month)
+        ->
+          candidate_year * 12 + candidate_month
+          > current_year * 12 + current_month
+        _, _, _, _ -> False
+      }
+    _, _ -> False
   }
 }
 
@@ -145,10 +247,11 @@ fn archive_valid_contributions(
   period: String,
   budget: HouseholdBudget,
 ) -> Result(ContributionHistoryEntry, StorageError) {
-  let HouseholdBudget(people_count, account_balance_cents, expenses) = budget
+  let HouseholdBudget(people_count:, account_balance_cents:, expenses:, ..) =
+    budget
   let domain_expenses =
     list.map(expenses, fn(expense) {
-      let ExpenseLine(_, amount_cents) = expense
+      let ExpenseLine(_, _, _, amount_cents) = expense
       domain_budget.Expense(amount_cents)
     })
   case
@@ -187,13 +290,15 @@ fn archive_valid_contributions(
           <> "ON CONFLICT (period) DO NOTHING RETURNING period"
           <> "), saved_expenses AS ("
           <> "INSERT INTO household_contribution_history_expenses "
-          <> "(period, position, label, amount_cents) "
+          <> "(period, position, label, category, is_variable, amount_cents) "
           <> "SELECT archived.period, (entry.ordinality - 1)::integer, "
-          <> "expense.label, expense.amount_cents FROM archived "
+          <> "expense.label, expense.category, expense.is_variable, "
+          <> "expense.amount_cents FROM archived "
           <> "CROSS JOIN LATERAL jsonb_array_elements($10::jsonb) "
           <> "WITH ORDINALITY AS entry(data, ordinality) "
           <> "CROSS JOIN LATERAL jsonb_to_record(entry.data) "
-          <> "AS expense(label text, amount_cents bigint) "
+          <> "AS expense(label text, category text, is_variable boolean, "
+          <> "amount_cents bigint) "
           <> "RETURNING period) "
           <> "SELECT archived.period::text FROM archived "
           <> "CROSS JOIN (SELECT count(*) FROM saved_expenses) AS written",
@@ -285,7 +390,7 @@ fn load_history_entry(
   ) = header
   let query =
     pog.query(
-      "SELECT label, amount_cents "
+      "SELECT label, category, is_variable, amount_cents "
       <> "FROM household_contribution_history_expenses "
       <> "WHERE period = ($1::text || '-01')::date ORDER BY position",
     )
@@ -370,7 +475,12 @@ fn save_valid_budget(
   database: pog.Connection,
   budget: HouseholdBudget,
 ) -> Result(Nil, StorageError) {
-  let HouseholdBudget(people_count, account_balance_cents, expenses) = budget
+  let HouseholdBudget(
+    period: _,
+    people_count:,
+    account_balance_cents:,
+    expenses:,
+  ) = budget
   let expenses_json =
     expenses
     |> list.map(expense_to_json)
@@ -380,38 +490,46 @@ fn save_valid_budget(
   let query =
     pog.query(
       "WITH saved_budget AS ("
-      <> "INSERT INTO household_budget_state "
-      <> "(id, people_count, account_balance_cents, expense_count) "
-      <> "VALUES ($1::uuid, $2::integer, $3::bigint, "
-      <> "jsonb_array_length($4::jsonb)) "
-      <> "ON CONFLICT (id) DO UPDATE SET "
-      <> "people_count = EXCLUDED.people_count, "
-      <> "account_balance_cents = EXCLUDED.account_balance_cents, "
-      <> "expense_count = EXCLUDED.expense_count, "
-      <> "updated_at = now() RETURNING id"
+      <> "UPDATE household_budget_state SET "
+      <> "people_count = $2::integer, account_balance_cents = $3::bigint, "
+      <> "expense_count = jsonb_array_length($5::jsonb), "
+      <> "updated_at = now() WHERE id = $1::uuid "
+      <> "AND period = ($4::text || '-01')::date RETURNING id"
       <> "), saved_expenses AS ("
       <> "INSERT INTO household_budget_expenses "
-      <> "(budget_id, position, label, amount_cents) "
+      <> "(budget_id, position, label, category, is_variable, amount_cents) "
       <> "SELECT saved_budget.id, (entry.ordinality - 1)::integer, "
-      <> "expense.label, expense.amount_cents "
-      <> "FROM saved_budget "
-      <> "CROSS JOIN LATERAL jsonb_array_elements($4::jsonb) "
+      <> "expense.label, expense.category, expense.is_variable, "
+      <> "expense.amount_cents FROM saved_budget "
+      <> "CROSS JOIN LATERAL jsonb_array_elements($5::jsonb) "
       <> "WITH ORDINALITY AS entry(data, ordinality) "
       <> "CROSS JOIN LATERAL jsonb_to_record(entry.data) "
-      <> "AS expense(label text, amount_cents bigint) "
+      <> "AS expense(label text, category text, is_variable boolean, "
+      <> "amount_cents bigint) "
       <> "ON CONFLICT (budget_id, position) DO UPDATE SET "
-      <> "label = EXCLUDED.label, amount_cents = EXCLUDED.amount_cents"
-      <> ") DELETE FROM household_budget_expenses "
+      <> "label = EXCLUDED.label, category = EXCLUDED.category, "
+      <> "is_variable = EXCLUDED.is_variable, "
+      <> "amount_cents = EXCLUDED.amount_cents"
+      <> "), deleted_expenses AS ("
+      <> "DELETE FROM household_budget_expenses "
       <> "WHERE budget_id = $1::uuid "
-      <> "AND position >= jsonb_array_length($4::jsonb)",
+      <> "AND position >= jsonb_array_length($5::jsonb) "
+      <> "AND EXISTS (SELECT 1 FROM saved_budget) RETURNING position"
+      <> ") SELECT id FROM saved_budget",
     )
     |> pog.parameter(pog.text(household_budget_id))
     |> pog.parameter(pog.int(people_count))
     |> pog.parameter(pog.int(account_balance_cents))
+    |> pog.parameter(pog.text(budget.period))
     |> pog.parameter(pog.text(expenses_json))
 
   case pog.execute(query, on: database) {
-    Ok(_) -> Ok(Nil)
+    Ok(returned) ->
+      case returned.rows {
+        [_] -> Ok(Nil)
+        [] -> Error(BudgetMonthMismatch)
+        _ -> Error(UnexpectedResultCount)
+      }
     Error(error) -> Error(DatabaseError(error))
   }
 }
@@ -422,7 +540,8 @@ fn list_expenses(
 ) -> Result(List(ExpenseLine), StorageError) {
   let query =
     pog.query(
-      "SELECT label, amount_cents FROM household_budget_expenses "
+      "SELECT label, category, is_variable, amount_cents "
+      <> "FROM household_budget_expenses "
       <> "WHERE budget_id = $1::uuid AND position < $2::integer "
       <> "ORDER BY position",
     )
@@ -437,12 +556,16 @@ fn list_expenses(
 }
 
 fn validate_budget(budget: HouseholdBudget) -> Result(Nil, StorageError) {
-  case budget.people_count < 0 {
-    True -> Error(InvalidPeopleCount)
-    False ->
-      case budget.account_balance_cents < 0 {
-        True -> Error(NegativeBalance)
-        False -> validate_expenses(budget.expenses)
+  case valid_period(budget.period) {
+    False -> Error(InvalidHistoryPeriod)
+    True ->
+      case budget.people_count < 0 {
+        True -> Error(InvalidPeopleCount)
+        False ->
+          case budget.account_balance_cents < 0 {
+            True -> Error(NegativeBalance)
+            False -> validate_expenses(budget.expenses)
+          }
       }
   }
 }
@@ -450,31 +573,40 @@ fn validate_budget(budget: HouseholdBudget) -> Result(Nil, StorageError) {
 fn validate_expenses(expenses: List(ExpenseLine)) -> Result(Nil, StorageError) {
   case expenses {
     [] -> Ok(Nil)
-    [ExpenseLine(_, amount_cents), ..rest] ->
-      case amount_cents < 0 {
-        True -> Error(NegativeExpense)
-        False -> validate_expenses(rest)
+    [ExpenseLine(_, category, _, amount_cents), ..rest] ->
+      case string.trim(category) == "" {
+        True -> Error(MissingExpenseCategory)
+        False ->
+          case amount_cents < 0 {
+            True -> Error(NegativeExpense)
+            False -> validate_expenses(rest)
+          }
       }
   }
 }
 
-fn budget_state_decoder() -> decode.Decoder(#(Int, Int, Int)) {
-  use people_count <- decode.subfield([0], decode.int)
-  use account_balance_cents <- decode.subfield([1], decode.int)
-  use expense_count <- decode.subfield([2], decode.int)
-  decode.success(#(people_count, account_balance_cents, expense_count))
+fn budget_state_decoder() -> decode.Decoder(#(String, Int, Int, Int)) {
+  use period <- decode.subfield([0], decode.string)
+  use people_count <- decode.subfield([1], decode.int)
+  use account_balance_cents <- decode.subfield([2], decode.int)
+  use expense_count <- decode.subfield([3], decode.int)
+  decode.success(#(period, people_count, account_balance_cents, expense_count))
 }
 
 fn expense_decoder() -> decode.Decoder(ExpenseLine) {
   use label <- decode.subfield([0], decode.string)
-  use amount_cents <- decode.subfield([1], decode.int)
-  decode.success(ExpenseLine(label:, amount_cents:))
+  use category <- decode.subfield([1], decode.string)
+  use is_variable <- decode.subfield([2], decode.bool)
+  use amount_cents <- decode.subfield([3], decode.int)
+  decode.success(ExpenseLine(label:, category:, is_variable:, amount_cents:))
 }
 
 fn expense_to_json(expense: ExpenseLine) -> json.Json {
-  let ExpenseLine(label:, amount_cents:) = expense
+  let ExpenseLine(label:, category:, is_variable:, amount_cents:) = expense
   json.object([
     #("label", json.string(label)),
+    #("category", json.string(category)),
+    #("is_variable", json.bool(is_variable)),
     #("amount_cents", json.int(amount_cents)),
   ])
 }

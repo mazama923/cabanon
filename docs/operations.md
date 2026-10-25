@@ -30,7 +30,7 @@ For an update, download and extract the release bundle on the application LXC, t
 sudo ./installer/deploy.sh --release-dir ./cabanon-release-vMAJOR.MINOR.PATCH
 ```
 
-`deploy.sh` verifies the bundle and shipment checksums, confirms Debian 13 OTP compatibility, applies pending migrations, installs an immutable release, updates the `current` link atomically, restarts systemd, and waits for `/readyz`. If the new release fails to start or become ready, it restores the preceding release automatically. It does not recreate database roles, overwrite the environment file, or prompt for secrets.
+`deploy.sh` verifies the bundle and shipment checksums, confirms Debian 13 OTP compatibility, applies pending migrations, installs an immutable release, updates the `current` link atomically, restarts systemd, and waits for `/readyz`. If the new release fails to start or become ready, it restores the preceding release automatically. It does not recreate database roles, overwrite the environment file, or prompt for secrets. The application footer displays the active release version from `/version.json`; inspect `/opt/cabanon/current/manifest.json` on the application LXC for the full release metadata.
 
 ## Caddy and Pocket ID requirements
 
